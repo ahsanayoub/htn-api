@@ -1,5 +1,5 @@
 import * as cheerio from "cheerio";
-import { HTNJob } from "../models/Job.js";
+import type { HTNJob } from "../models/Job.js";
 
 export function extractMicro1(
     html: string,

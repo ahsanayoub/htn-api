@@ -2,6 +2,7 @@
   "name": "htn-api",
   "version": "1.0.0",
   "description": "HTN Extractor API",
+  "type": "module",
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
@@ -20,6 +21,7 @@
     "zod": "^4.0.5"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.19",
     "@types/express": "^5.0.3",
     "@types/node": "^24.0.13",
     "tsx": "^4.20.5",
