@@ -1,0 +1,17 @@
+node_modules/
+dist/
+build/
+
+.env
+.env.*
+
+debug.html
+
+*.log
+
+.vscode/settings.json
+
+.DS_Store
+Thumbs.db
+
+Fitness Expert _ Apply on Job_files/
