@@ -44,6 +44,12 @@ console.log("About to parse JSON...");
 
 const job = JSON.parse(json);
 
+const plainDescription = cheerio
+    .load(job.description ?? "")
+    .text()
+    .replace(/\s+/g, " ")
+    .trim();
+
 console.log("JSON parsed successfully!");
 
 const htnJob: HTNJob = {
@@ -56,7 +62,7 @@ const htnJob: HTNJob = {
 
         company: job.hiringOrganization?.name ?? "",
 
-        description: job.description?.substring(0, 1900) ?? "",
+        description: plainDescription.substring(0, 1900),
 
         employmentType: job.employmentType,
 
