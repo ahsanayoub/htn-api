@@ -42,7 +42,7 @@ router.post("/micro1", async (req, res) => {
 
         console.log("Extractor finished");
 
-        res.json(job);
+        res.status(200).json(job);
 
     } catch (error: any) {
 

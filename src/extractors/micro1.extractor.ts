@@ -56,7 +56,7 @@ const htnJob: HTNJob = {
 
         company: job.hiringOrganization?.name ?? "",
 
-        description: job.description,
+        description: job.description?.substring(0, 1900) ?? "",
 
         employmentType: job.employmentType,
 
