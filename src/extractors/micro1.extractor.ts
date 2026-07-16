@@ -50,6 +50,10 @@ const plainDescription = cheerio
     .replace(/\s+/g, " ")
     .trim();
 
+
+    console.log("Original:", job.description.substring(0, 100));
+    console.log("Plain:", plainDescription.substring(0, 100));
+
 console.log("JSON parsed successfully!");
 
 const htnJob: HTNJob = {
@@ -82,6 +86,7 @@ const htnJob: HTNJob = {
 
     };
 
+    console.log("Final description:", htnJob.description.substring(0, 100));
     return {
         success: true,
         job: htnJob
