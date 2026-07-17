@@ -5,19 +5,16 @@ export function extractMicro1(
     html: string,
     url: string
 ) {
-
     const $ = cheerio.load(html);
 
     let payload = "";
 
     $("script").each((_, el) => {
-
         const text = $(el).html() ?? "";
 
         if (text.includes("JobPosting")) {
             payload = text;
         }
-
     });
 
     if (!payload) {
@@ -35,32 +32,34 @@ export function extractMicro1(
 
     let json = payload.substring(start, end + 1);
 
-    // Unescape
+    // Unescape JSON
     json = json
-    .replace(/\\"/g, '"')
-    .replace(/\\\\/g, "\\");
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, "\\");
 
-console.log("About to parse JSON...");
+    console.log("About to parse JSON...");
 
-const job = JSON.parse(json);
+    const job = JSON.parse(json);
 
-const plainDescription = cheerio
-    .load(job.description ?? "")
-    .text()
-    .replace(/\s+/g, " ")
-    .trim();
+    const plainDescription = cheerio
+        .load(job.description ?? "")
+        .text()
+        .replace(/\s+/g, " ")
+        .trim();
 
-
-    console.log("Original:", job.description.substring(0, 100));
+    console.log("Original:", (job.description ?? "").substring(0, 100));
     console.log("Plain:", plainDescription.substring(0, 100));
 
-console.log("JSON parsed successfully!");
+    console.log("JSON parsed successfully!");
 
-const htnJob: HTNJob = {
+    // Extract clean Job ID (without query parameters)
+    const parsedUrl = new URL(url);
+    const sourceJobId = parsedUrl.pathname.split("/").pop() ?? "";
 
+    const htnJob: HTNJob = {
         source: "micro1",
 
-        sourceJobId: url.split("/").pop() ?? "",
+        sourceJobId,
 
         title: job.title,
 
@@ -83,13 +82,13 @@ const htnJob: HTNJob = {
         validThrough: job.validThrough,
 
         remote: job.jobLocationType === "TELECOMMUTE"
-
     };
 
+    console.log("Extracted Job ID:", sourceJobId);
     console.log("Final description:", htnJob.description.substring(0, 100));
+
     return {
         success: true,
         job: htnJob
     };
-
 }
