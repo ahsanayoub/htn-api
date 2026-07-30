@@ -1,3 +1,4 @@
-export async function getJobByJobId(jobId: string) {
-
-}
+export async function findByExternalId(
+    source: string,
+    externalId: string
+  ): Promise<string | null> {}
