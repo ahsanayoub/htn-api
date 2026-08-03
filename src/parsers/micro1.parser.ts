@@ -1,7 +1,7 @@
-import { Micro1JobDetailDTO } from "../dto/micro1-job.dto";
-import { Micro1JobPayload } from "./micro1.payload";
-import { JobPostingSchema } from "./micro1.types";
-import { NextFlightDecoder } from "./decoders/next-flight.decoder";
+import { Micro1JobDetailDTO } from "../dto/micro1-job-detail.dto.js";
+import { Micro1JobPayload } from "./micro1.payload.js";
+import { JobPostingSchema } from "./micro1.types.js";
+import { NextFlightDecoder } from "./decoders/next-flight.decoder.js";
 import { HtmlCleaner } from "../extractors/job-content/html-cleaner.js";
 import { SectionExtractor } from "../extractors/job-content/section-extractor.js";
 
