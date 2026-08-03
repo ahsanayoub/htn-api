@@ -76,11 +76,17 @@ router.get("/", async (req, res) => {
             pagination: result.pagination,
         });
     } catch (error) {
+        console.error("========== JOBS API ERROR ==========");
         console.error(error);
-
+    
+        if (error instanceof Error) {
+            console.error(error.message);
+            console.error(error.stack);
+        }
+    
         res.status(500).json({
             success: false,
-            message: "Internal server error",
+            message: error instanceof Error ? error.message : "Internal server error",
         });
     }
 });
