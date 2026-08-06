@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(node -e \"const u=new URL(process.env.DATABASE_URL); console.log('decoded host:', u.hostname, 'port:', u.port, 'user:', u.username, 'pass:', u.password, 'db:', u.pathname)\" 2>&1)",
+      "Shell(:DATABASE_URL:*)",
+      "Shell(node -e const u=new URL(process.env.DATABASE_URL); console.log('host:', u.hostname, 'port:', u.port, 'user:', u.username, 'db:', u.pathname);)",
+      "Shell(call:*)"
+    ],
+    "deny": [],
+    "defaultMode": "default"
+  }
+}

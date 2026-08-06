@@ -1,0 +1,23 @@
+# Prisma Schema Preferences
+
+- Use UUID primary keys on every model. Confidence: 0.95
+- Every model includes `id`, `createdAt`, and `updatedAt` fields. Confidence: 0.95
+- External objects support optional `externalId` and `sourceVersion` fields (both `String?`). Confidence: 0.95
+- Every model includes an optional `metadata` field (Json?). Confidence: 0.95
+- Use proper foreign keys in relations. Confidence: 0.9
+- Use explicit relation names whenever Prisma would otherwise generate ambiguous relations. Confidence: 0.95
+- Use indexes on commonly queried fields. Confidence: 0.9
+- Use enums instead of strings wherever appropriate. Confidence: 0.95
+- Do not use enums where the business taxonomy will evolve; use lookup tables (models) instead. Confidence: 0.9
+- Follow Prisma best practices (e.g., `defineConfig`, modern config API). Confidence: 0.9
+- Uses PostgreSQL 18 as the database provider. Confidence: 0.9
+- Implement models incrementally on explicit request only — do not create stub/placeholder models (even with `@@ignore`) for not-yet-requested entities. Confidence: 0.9
+- Junction tables use composite `@@id([field1, field2])` primary keys instead of a UUID `id` field. Confidence: 0.9
+- Use `Decimal?` for all monetary/amount fields (e.g., salary, salary expectations). Confidence: 0.9
+- Prefer relationships over repeated string fields (model reality; avoid duplicated information). Confidence: 0.9
+- Design schemas to support future capabilities (AI matching, knowledge graph, CRM/intelligence) without requiring redesign. Confidence: 0.8
+- When an architecture is already specified, implement entities exactly as given — do not invent, rename, or simplify entities, and preserve existing relationships. Confidence: 0.9
+- Enforce business-rule-level deduplication via `@@unique` composite constraints (e.g., one application per candidate per job). Confidence: 0.85
+- Wire up inverse relation fields on existing models whenever a new relation is introduced. Confidence: 0.9
+- Avoid redundant indexes already covered by a composite primary key. Confidence: 0.75
+- For models that can attach to multiple possible parent entities (associative/polymorphic-style linking), prefers optional relations using nullable FKs (`String? @db.Uuid`) and nullable relation fields (`Parent?`), so each can independently reference one, several, or none of them rather than requiring a single mandatory parent. Confidence: 0.8

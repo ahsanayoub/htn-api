@@ -1,0 +1,21 @@
+# General Coding Preferences
+- When the task is schema-only (e.g., "implement schema.prisma"), restricts output to the Prisma schema file and avoids generating services, repositories, or controllers. Confidence: 0.9
+- For migration/implementation tasks, expects full clean-architecture implementation across prisma client, repositories, services, mappers, and scripts. Confidence: 0.9
+- Avoids explanatory commentary on the code — prefers code output without prose explanations. Confidence: 0.9
+- Prefers architecture decisions specified upfront as explicit, numbered project rules. Confidence: 0.9
+- Prefers validating Prisma schema with `npx prisma validate` before considering work done. Confidence: 0.85
+- TypeScript with Express and Prisma. Confidence: 0.9
+- Follows Repository → Service → Route clean architecture; repositories contain all database access. Confidence: 0.95
+- Uses a Prisma client singleton with the `global.prisma` hot-reload pattern to prevent connection pool exhaustion in development. Confidence: 0.9
+- Pushes all filtering, sorting, and pagination to the database layer via Prisma `where`/`orderBy`/`skip`/`take` instead of filtering in JavaScript. Confidence: 0.95
+- Preserves the exact existing API contract and response structure — backward compatibility is non-negotiable during migrations. Confidence: 0.95
+- Prefers incremental migration: keeps old Notion importer and service intact until the new implementation is verified. Confidence: 0.9
+- Uses database transactions for multi-step operations that touch multiple models (e.g., upsert organization + job + skills in one transaction). Confidence: 0.85
+- Avoids duplicated logic across layers. Confidence: 0.85
+- Uses `findFirst` + `create` pattern for non-unique upserts, since Prisma's `upsert` requires a unique `where` key. Confidence: 0.85
+- Organizes code with directory-based clean architecture: `src/prisma/` (client), `src/repositories/` (data access), `src/services/` (business logic), `src/mappers/` (data transformation), `src/scripts/` (one-off scripts). Confidence: 0.9
+- Uses `import type` for type-only imports from Prisma generated client. Confidence: 0.8
+- Uses `.js` extensions in relative imports (ESM-style). Confidence: 0.8
+- Uses `as const` for shared Prisma `include` objects. Confidence: 0.8
+- Uses `Promise.all` for parallel independent database queries (e.g., `findMany` + `count` in the same call). Confidence: 0.85
+- Converts Prisma enums to API-compatible strings at the mapper layer (e.g., `JobSource` enum → lowercase string, `WorkplaceType` → Title Case) to preserve frontend API contracts. Confidence: 0.85
