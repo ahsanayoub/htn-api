@@ -19,5 +19,6 @@
 - When an architecture is already specified, implement entities exactly as given — do not invent, rename, or simplify entities, and preserve existing relationships. Confidence: 0.9
 - Enforce business-rule-level deduplication via `@@unique` composite constraints (e.g., one application per candidate per job). Confidence: 0.85
 - Wire up inverse relation fields on existing models whenever a new relation is introduced. Confidence: 0.9
+- Ensures Prisma generator `provider` matches the import paths used in code (e.g., `prisma-client-js` provider with `@prisma/client` imports) — keeps schema config and code imports consistent. Confidence: 0.9
 - Avoid redundant indexes already covered by a composite primary key. Confidence: 0.75
 - For models that can attach to multiple possible parent entities (associative/polymorphic-style linking), prefers optional relations using nullable FKs (`String? @db.Uuid`) and nullable relation fields (`Parent?`), so each can independently reference one, several, or none of them rather than requiring a single mandatory parent. Confidence: 0.8

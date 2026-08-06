@@ -19,3 +19,6 @@
 - Uses `as const` for shared Prisma `include` objects. Confidence: 0.8
 - Uses `Promise.all` for parallel independent database queries (e.g., `findMany` + `count` in the same call). Confidence: 0.85
 - Converts Prisma enums to API-compatible strings at the mapper layer (e.g., `JobSource` enum → lowercase string, `WorkplaceType` → Title Case) to preserve frontend API contracts. Confidence: 0.85
+- Investigates root cause systematically (schema config, package versions, import paths) before making changes. Confidence: 0.9
+- Prefers surgical fixes that preserve existing architecture rather than restructuring. Confidence: 0.9
+- Does not stop until TypeScript compilation (`npm run build`) succeeds — persists through failures iteratively. Confidence: 0.9
