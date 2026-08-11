@@ -9,7 +9,8 @@
 - Uses a Prisma client singleton with the `global.prisma` hot-reload pattern to prevent connection pool exhaustion in development. Confidence: 0.9
 - Pushes all filtering, sorting, and pagination to the database layer via Prisma `where`/`orderBy`/`skip`/`take` instead of filtering in JavaScript. Confidence: 0.95
 - Preserves the exact existing API contract and response structure — backward compatibility is non-negotiable during migrations. Confidence: 0.95
-- Prefers incremental migration: keeps old Notion importer and service intact until the new implementation is verified. Confidence: 0.9
+- Prefers incremental, phased migration with explicitly numbered phases (e.g., Phase 1, 2, 3); keeps old code (e.g., Notion importer/service) intact until the new implementation is verified, and does not proceed to the next phase until the user explicitly confirms the verification report. Confidence: 0.9
+- Produces verification reports that enumerate every endpoint tested with explicit pass/fail results as a gating checkpoint before approving progression to the next phase. Confidence: 0.9
 - Uses database transactions for multi-step operations that touch multiple models (e.g., upsert organization + job + skills in one transaction). Confidence: 0.85
 - Avoids duplicated logic across layers. Confidence: 0.85
 - Uses `findFirst` + `create` pattern for non-unique upserts, since Prisma's `upsert` requires a unique `where` key. Confidence: 0.85
@@ -20,5 +21,23 @@
 - Uses `Promise.all` for parallel independent database queries (e.g., `findMany` + `count` in the same call). Confidence: 0.85
 - Converts Prisma enums to API-compatible strings at the mapper layer (e.g., `JobSource` enum → lowercase string, `WorkplaceType` → Title Case) to preserve frontend API contracts. Confidence: 0.85
 - Investigates root cause systematically (schema config, package versions, import paths) before making changes. Confidence: 0.9
+- Produces an exhaustive, cross-layer inventory (every repository, service, controller, and endpoint) before beginning migration work — never skips cataloging a layer or file. Confidence: 0.85
+- Wants migration items explicitly categorized by priority (Critical, Medium, Low) as a checklist before any execution begins. Confidence: 0.9
 - Prefers surgical fixes that preserve existing architecture rather than restructuring. Confidence: 0.9
 - Does not stop until TypeScript compilation (`npm run build`) succeeds — persists through failures iteratively. Confidence: 0.9
+- Masks passwords and any credentials in printed/diagnostic output (e.g., parsed `DATABASE_URL` info) — never logs secrets. Confidence: 0.9
+- Prints pre-operation diagnostic context (database host, database name, SSL status, existing record counts) before data-migration or bulk-write operations to verify the target environment. Confidence: 0.7
+- When a long-running ingestion/import script times out, re-runs with a longer timeout rather than modifying the code. Confidence: 0.85
+- Creates dedicated verification scripts that query the database directly through Prisma (counts, groupBy, findFirst with includes, duplicate checks) to verify data integrity after ingestion. Confidence: 0.8
+- When grepping logs for errors, recognizes that search patterns can match false positives in job description content (e.g., "failure" appearing in HTML job descriptions) and distinguishes actual errors from content matches. Confidence: 0.75
+- Before continuing imports or designing sync behavior, runs database-level analysis (Prisma/SQL counts, groupBys, duplicate detection, date ranges) to understand the full inventory state. Confidence: 0.9
+- Non-destructive analysis approach: explicitly avoids deleting or marking jobs closed during the analysis phase; prefers to understand the full picture before making any data modifications. Confidence: 0.9
+- Treats the database as a unified system across all sources rather than focusing on a single source in isolation when analyzing job inventory. Confidence: 0.85
+- Prefers reconciliation reports in a "Source | Total | Active | Closed" table format, with sections for duplicate external IDs, jobs without external IDs, and import statistics. Confidence: 0.85
+- Prefers targeted database queries over re-running the full importer during analysis/debugging phases. Confidence: 0.8
+- Designs ingestion pipelines with a source-agnostic adapter pattern — a `SourceAdapter` interface with a `source` property and source-agnostic `SourceSyncService`, so new sources (Greenhouse, Lever, etc.) only require implementing a new adapter. Confidence: 0.9
+- Adds an optional `limit` parameter to batch/sync methods for controlled testing and safe incremental runs. Confidence: 0.85
+- Processes batch ingestion jobs individually (per-job) rather than wrapping the entire batch in a single long-running transaction, to avoid transaction timeouts. Confidence: 0.85
+- Uses a `scratchpad/` directory for temporary investigation/diagnostic scripts, keeping them separate from production `src/scripts/` code. Confidence: 0.9
+- Cross-references database state with external API data to identify specific failed records (e.g., fetching the full portal job list and comparing against DB sync status to find which job was seen but not updated). Confidence: 0.8
+- Uses `node` to run `.mjs` standalone scripts and `npx tsx` to run `.ts` scripts, matching the runtime to the file type. Confidence: 0.8

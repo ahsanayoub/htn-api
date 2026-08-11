@@ -10,7 +10,7 @@
 - Use enums instead of strings wherever appropriate. Confidence: 0.95
 - Do not use enums where the business taxonomy will evolve; use lookup tables (models) instead. Confidence: 0.9
 - Follow Prisma best practices (e.g., `defineConfig`, modern config API). Confidence: 0.9
-- Uses PostgreSQL 18 as the database provider. Confidence: 0.9
+- Uses PostgreSQL 18 (via Neon serverless PostgreSQL platform) as the database provider. Confidence: 0.9
 - Implement models incrementally on explicit request only — do not create stub/placeholder models (even with `@@ignore`) for not-yet-requested entities. Confidence: 0.9
 - Junction tables use composite `@@id([field1, field2])` primary keys instead of a UUID `id` field. Confidence: 0.9
 - Use `Decimal?` for all monetary/amount fields (e.g., salary, salary expectations). Confidence: 0.9
@@ -20,5 +20,9 @@
 - Enforce business-rule-level deduplication via `@@unique` composite constraints (e.g., one application per candidate per job). Confidence: 0.85
 - Wire up inverse relation fields on existing models whenever a new relation is introduced. Confidence: 0.9
 - Ensures Prisma generator `provider` matches the import paths used in code (e.g., `prisma-client-js` provider with `@prisma/client` imports) — keeps schema config and code imports consistent. Confidence: 0.9
+- Uses `$queryRaw` for SQL queries that Prisma's client API doesn't support (e.g., GROUP BY with HAVING for duplicate detection). Confidence: 0.8
+- Prefers native typed columns (DateTime, etc.) over storing queryable sync fields in JSON `metadata` — fields that need to be queried, filtered, or indexed should have dedicated schema columns. Confidence: 0.9
+- Uses a dedicated per-source sync watermark model (e.g., `SourceSync`) to track sync state across multiple job sources, with fields like `lastSyncAt`, `lastSyncStart`, and import counts. Confidence: 0.9
 - Avoid redundant indexes already covered by a composite primary key. Confidence: 0.75
+- For standalone Node.js scripts (e.g., in `scratchpad/`), uses `@prisma/adapter-pg` with `PrismaPg` and `DATABASE_URL` rather than the app's Prisma client singleton. Confidence: 0.85
 - For models that can attach to multiple possible parent entities (associative/polymorphic-style linking), prefers optional relations using nullable FKs (`String? @db.Uuid`) and nullable relation fields (`Parent?`), so each can independently reference one, several, or none of them rather than requiring a single mandatory parent. Confidence: 0.8
