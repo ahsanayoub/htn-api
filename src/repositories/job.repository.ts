@@ -1,5 +1,5 @@
 import prisma from "../prisma/client.js";
-import { Prisma } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import {
   EmploymentType,
   JobSource,
@@ -50,6 +50,14 @@ export interface JobUpsertData {
   status?: JobStatus;
   sourceVersion?: string | null;
   skillNames?: string[];
+  salaryMin?: number | null;
+  salaryMax?: number | null;
+  salaryCurrency?: string | null;
+  location?: string | null;
+  country?: string | null;
+  lastSeenAt?: Date | null;
+  lastSyncedAt?: Date | null;
+  metadata?: Prisma.InputJsonValue | null;
 }
 
 const EMPLOYMENT_TYPE_MAP: Record<string, EmploymentType> = {
@@ -127,8 +135,16 @@ export class JobRepository {
     });
   }
 
-  async upsert(data: JobUpsertData): Promise<JobWithRelations> {
-    return prisma.$transaction(async (tx) => {
+  async upsert(data: JobUpsertData): Promise<"created" | "updated"> {
+    const { wasExisting, jobId } = await prisma.$transaction(async (tx) => {
+      const existing = await tx.job.findFirst({
+        where: {
+          source: data.source,
+          externalId: data.externalId,
+        },
+        select: { id: true },
+      });
+
       const job = await tx.job.upsert({
         where: {
           source_externalId: {
@@ -156,7 +172,14 @@ export class JobRepository {
           canonicalUrl: data.canonicalUrl,
           status: data.status ?? JobStatus.IMPORTED,
           sourceVersion: data.sourceVersion,
-          metadata: {},
+          salaryMin: data.salaryMin,
+          salaryMax: data.salaryMax,
+          salaryCurrency: data.salaryCurrency,
+          location: data.location,
+          country: data.country,
+          lastSeenAt: data.lastSeenAt,
+          lastSyncedAt: data.lastSyncedAt,
+          metadata: data.metadata ?? {},
         },
         update: {
           title: data.title,
@@ -175,44 +198,83 @@ export class JobRepository {
           canonicalUrl: data.canonicalUrl,
           status: data.status ?? JobStatus.IMPORTED,
           sourceVersion: data.sourceVersion,
+          salaryMin: data.salaryMin,
+          salaryMax: data.salaryMax,
+          salaryCurrency: data.salaryCurrency,
+          location: data.location,
+          country: data.country,
+          lastSeenAt: data.lastSeenAt,
+          lastSyncedAt: data.lastSyncedAt,
         },
-        include: JOB_INCLUDES,
       });
 
-      if (data.skillNames && data.skillNames.length > 0) {
-        await this.addSkills(tx, job.id, data.skillNames);
-      }
+      return { wasExisting: !!existing, jobId: job.id };
+    });
 
-      return job;
+    if (data.skillNames && data.skillNames.length > 0) {
+      await this.addSkills(prisma, jobId, data.skillNames);
+    }
+
+    return wasExisting ? "updated" : "created";
+  }
+
+  async findStaleJobs(
+    source: JobSource,
+    since: Date,
+  ): Promise<{ id: string; externalId: string | null }[]> {
+    return prisma.job.findMany({
+      where: {
+        source,
+        OR: [
+          { lastSeenAt: { lt: since } },
+          { lastSeenAt: null },
+        ],
+      },
+      select: { id: true, externalId: true },
     });
   }
 
   async addSkills(
-    tx: Prisma.TransactionClient,
+    client: PrismaClient,
     jobId: string,
     skillNames: string[]
   ): Promise<void> {
-    const skillIds: string[] = [];
+    const trimmed = skillNames
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
 
-    for (const name of skillNames) {
-      const trimmed = name.trim();
-      if (!trimmed) continue;
+    if (trimmed.length === 0) return;
 
-      const existing = await tx.skill.findFirst({
-        where: { name: { equals: trimmed, mode: "insensitive" } },
+    const existing = await client.skill.findMany({
+      where: { name: { in: trimmed, mode: "insensitive" } },
+      select: { id: true, name: true },
+    });
+
+    const existingLower = new Set(
+      existing.map((s) => s.name.toLowerCase()),
+    );
+
+    const newNames = trimmed.filter(
+      (n) => !existingLower.has(n.toLowerCase()),
+    );
+
+    if (newNames.length > 0) {
+      await client.skill.createMany({
+        data: newNames.map((name) => ({ name })),
+        skipDuplicates: true,
       });
-
-      if (existing) {
-        skillIds.push(existing.id);
-      } else {
-        const created = await tx.skill.create({ data: { name: trimmed } });
-        skillIds.push(created.id);
-      }
     }
+
+    const allSkills = await client.skill.findMany({
+      where: { name: { in: trimmed, mode: "insensitive" } },
+      select: { id: true },
+    });
+
+    const skillIds = allSkills.map((s) => s.id);
 
     if (skillIds.length === 0) return;
 
-    await tx.jobSkill.createMany({
+    await client.jobSkill.createMany({
       data: skillIds.map((skillId) => ({ jobId, skillId })),
       skipDuplicates: true,
     });

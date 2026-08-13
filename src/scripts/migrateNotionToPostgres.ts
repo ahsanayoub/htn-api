@@ -137,8 +137,58 @@ async function fetchAllNotionJobs(): Promise<any[]> {
   return allJobs;
 }
 
+function getConnectionInfo(): { host: string; db: string; ssl: boolean } {
+  const raw = process.env.DATABASE_URL || "";
+  if (!raw) {
+    return { host: "N/A", db: "N/A", ssl: false };
+  }
+
+  // URL-style: postgresql://user:pass@host:port/dbname?sslmode=require
+  if (/^postgres(?:ql)?:\/\//i.test(raw)) {
+    const url = new URL(raw);
+    const host = url.hostname || "N/A";
+    const db = (url.pathname.replace(/^\//, "") || "N/A").split("?")[0];
+    const sslmode = (url.searchParams.get("sslmode") || "").toLowerCase();
+    const sslParam = (url.searchParams.get("ssl") || "").toLowerCase();
+    const ssl =
+      (sslmode && sslmode !== "disable") || sslParam === "true" || sslParam === "1";
+    return { host, db, ssl };
+  }
+
+  // Key=value style: host=... port=... user=... password=... dbname=... sslmode=require
+  const params: Record<string, string> = {};
+  raw.split(/\s+/).forEach((pair) => {
+    const [key, value] = pair.split("=");
+    if (key && value) {
+      params[key.toLowerCase()] = value;
+    }
+  });
+  const host = params["host"] || params["server"] || "N/A";
+  const db = params["dbname"] || params["database"] || "N/A";
+  const sslmode = params["sslmode"] || "";
+  const ssl =
+    (sslmode && sslmode.toLowerCase() !== "disable") ||
+    params["ssl"] === "true" ||
+    params["ssl"] === "1";
+  return { host, db, ssl };
+}
+
+async function printPreMigrationInfo() {
+  const { host, db, ssl } = getConnectionInfo();
+  const existingJobs = await prisma.job.count();
+
+  console.log("==================== Pre-Migration Info ====================");
+  console.log(`Database host:         ${host}`);
+  console.log(`Database name:         ${db}`);
+  console.log(`SSL enabled:           ${ssl ? "true" : "false"}`);
+  console.log(`Existing jobs:         ${existingJobs}`);
+  console.log("=============================================================\n");
+}
+
 async function runMigration() {
   console.log("Starting migration from Notion to PostgreSQL...\n");
+
+  await printPreMigrationInfo();
 
   const notionJobs = await fetchAllNotionJobs();
   console.log(`Fetched ${notionJobs.length} jobs from Notion.\n`);

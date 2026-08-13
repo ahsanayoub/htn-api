@@ -1,8 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -11,9 +6,286 @@ datasource db {
   provider = "postgresql"
 }
 
-// ========================================
-// ENUMS
-// ========================================
+model Organization {
+  id            String           @id @default(uuid()) @db.Uuid
+  externalId    String?
+  sourceVersion String?
+  type          OrganizationType
+  name          String
+  legalName     String?
+  website       String?          @unique
+  linkedinUrl   String?
+  logoUrl       String?
+  industry      String?
+  description   String?
+  headquarters  String?
+  employeeCount Int?
+  foundedYear   Int?
+  metadata      Json?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  candidates    Candidate[]
+  contacts      Contact[]
+  documents     Document[]
+  jobs          Job[]
+
+  @@index([externalId])
+  @@index([name])
+  @@index([type])
+}
+
+model Contact {
+  id             String       @id @default(uuid()) @db.Uuid
+  externalId     String?
+  sourceVersion  String?
+  firstName      String
+  lastName       String
+  title          String?
+  department     String?
+  email          String?
+  phone          String?
+  linkedinUrl    String?
+  metadata       Json?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([email])
+  @@index([organizationId])
+  @@index([lastName])
+}
+
+model Job {
+  id                      String          @id @default(uuid()) @db.Uuid
+  externalId              String?
+  sourceVersion           String?
+  source                  JobSource?
+  organizationId          String          @db.Uuid
+  title                   String
+  slug                    String?         @unique
+  summary                 String?
+  description             String?
+  descriptionHtml         String?
+  responsibilities        String?
+  requirements            String?
+  preferredQualifications String?
+  benefits                String?
+  employmentType          EmploymentType?
+  workplaceType           WorkplaceType?
+  department              String?
+  seniority               String?
+  experienceMin           Int?
+  experienceMax           Int?
+  salaryMin               Decimal?
+  salaryMax               Decimal?
+  salaryCurrency          String?
+  location                String?
+  country                 String?
+  city                    String?
+  timezone                String?
+  remote                  Boolean?
+  openings                Int?
+  postedAt                DateTime?
+  expiresAt               DateTime?
+  status                  JobStatus       @default(IMPORTED)
+  applyUrl                String?
+  canonicalUrl            String?
+  metadata                Json?
+  createdAt               DateTime        @default(now())
+  updatedAt               DateTime        @updatedAt
+  lastSeenAt              DateTime?
+  lastSyncedAt            DateTime?
+  applications            Application[]
+  documents               Document[]
+  organization            Organization    @relation(fields: [organizationId], references: [id])
+  jobSkills               JobSkill[]
+
+  @@unique([source, externalId])
+  @@index([externalId])
+  @@index([source])
+  @@index([organizationId])
+  @@index([status])
+  @@index([employmentType])
+  @@index([workplaceType])
+  @@index([postedAt])
+  @@index([lastSeenAt])
+  @@index([lastSyncedAt])
+}
+
+model SourceSync {
+  id            String    @id @default(uuid()) @db.Uuid
+  source        JobSource @unique
+  lastSyncAt    DateTime?
+  lastSyncStart DateTime?
+  totalSeen     Int?
+  totalCreated  Int?
+  totalUpdated  Int?
+  totalFailed   Int?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model Candidate {
+  id                    String           @id @default(uuid()) @db.Uuid
+  externalId            String?
+  sourceVersion         String?
+  status                CandidateStatus  @default(NEW)
+  firstName             String
+  lastName              String
+  headline              String?
+  email                 String?
+  phone                 String?
+  linkedinUrl           String?
+  portfolioUrl          String?
+  githubUrl             String?
+  website               String?
+  currentTitle          String?
+  location              String?
+  country               String?
+  city                  String?
+  yearsExperience       Int?
+  workAuthorization     String?
+  availability          String?
+  desiredSalary         Decimal?
+  noticePeriod          Int?
+  summary               String?
+  metadata              Json?
+  currentOrganizationId String?          @db.Uuid
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+  applications          Application[]
+  currentOrganization   Organization?    @relation(fields: [currentOrganizationId], references: [id])
+  candidateSkills       CandidateSkill[]
+  documents             Document[]
+
+  @@index([email])
+  @@index([lastName])
+  @@index([currentOrganizationId])
+}
+
+model Application {
+  id                String             @id @default(uuid()) @db.Uuid
+  externalId        String?
+  sourceVersion     String?
+  candidateId       String             @db.Uuid
+  jobId             String             @db.Uuid
+  status            ApplicationStatus  @default(APPLIED)
+  source            ApplicationSource?
+  coverLetter       String?
+  additionalNotes   String?
+  salaryExpectation Decimal?
+  noticePeriod      Int?
+  submittedAt       DateTime?
+  metadata          Json?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  candidate         Candidate          @relation(fields: [candidateId], references: [id])
+  job               Job                @relation(fields: [jobId], references: [id])
+
+  @@unique([candidateId, jobId])
+  @@index([candidateId])
+  @@index([jobId])
+  @@index([status])
+}
+
+model Skill {
+  id                  String                    @id @default(uuid()) @db.Uuid
+  externalId          String?
+  sourceVersion       String?
+  name                String                    @unique
+  metadata            Json?
+  createdAt           DateTime                  @default(now())
+  updatedAt           DateTime                  @updatedAt
+  candidateSkills     CandidateSkill[]
+  jobSkills           JobSkill[]
+  categoryAssignments SkillCategoryAssignment[]
+}
+
+model SkillCategory {
+  id            String                    @id @default(uuid()) @db.Uuid
+  externalId    String?
+  sourceVersion String?
+  name          String                    @unique
+  metadata      Json?
+  createdAt     DateTime                  @default(now())
+  updatedAt     DateTime                  @updatedAt
+  assignments   SkillCategoryAssignment[]
+}
+
+model SkillCategoryAssignment {
+  skillId    String        @db.Uuid
+  categoryId String        @db.Uuid
+  metadata   Json?
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+  category   SkillCategory @relation(fields: [categoryId], references: [id])
+  skill      Skill         @relation(fields: [skillId], references: [id])
+
+  @@id([skillId, categoryId])
+  @@index([categoryId])
+}
+
+model CandidateSkill {
+  candidateId     String    @db.Uuid
+  skillId         String    @db.Uuid
+  yearsExperience Int?
+  proficiency     String?
+  verified        Boolean?
+  metadata        Json?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  candidate       Candidate @relation(fields: [candidateId], references: [id])
+  skill           Skill     @relation(fields: [skillId], references: [id])
+
+  @@id([candidateId, skillId])
+  @@index([skillId])
+}
+
+model JobSkill {
+  jobId     String   @db.Uuid
+  skillId   String   @db.Uuid
+  required  Boolean?
+  priority  Int?
+  metadata  Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  job       Job      @relation(fields: [jobId], references: [id])
+  skill     Skill    @relation(fields: [skillId], references: [id])
+
+  @@id([jobId, skillId])
+  @@index([skillId])
+}
+
+model Document {
+  id              String        @id @default(uuid()) @db.Uuid
+  externalId      String?
+  sourceVersion   String?
+  candidateId     String?       @db.Uuid
+  jobId           String?       @db.Uuid
+  organizationId  String?       @db.Uuid
+  type            DocumentType
+  storageProvider String?
+  storageKey      String?
+  fileName        String?
+  mimeType        String?
+  size            Int?
+  checksum        String?
+  version         Int           @default(1)
+  isLatest        Boolean?      @default(true)
+  uploadedBy      String?
+  metadata        Json?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  candidate       Candidate?    @relation(fields: [candidateId], references: [id])
+  job             Job?          @relation(fields: [jobId], references: [id])
+  organization    Organization? @relation(fields: [organizationId], references: [id])
+
+  @@index([candidateId])
+  @@index([jobId])
+  @@index([organizationId])
+  @@index([type])
+}
 
 enum OrganizationType {
   COMPANY
@@ -96,274 +368,4 @@ enum ApplicationSource {
   IMPORT
   LINKEDIN
   OTHER
-}
-
-// ========================================
-// MODELS
-// ========================================
-
-model Organization {
-  id            String           @id @default(uuid()) @db.Uuid
-  externalId    String?
-  sourceVersion String?
-  type          OrganizationType
-  name          String
-  legalName     String?
-  website       String? @unique
-  linkedinUrl   String?
-  logoUrl       String?
-  industry      String?
-  description   String?
-  headquarters  String?
-  employeeCount Int?
-  foundedYear   Int?
-  metadata      Json?
-  createdAt     DateTime         @default(now())
-  updatedAt     DateTime         @updatedAt
-  jobs          Job[]
-  contacts      Contact[]
-  documents     Document[]
-  candidates    Candidate[]
-
-  @@index([externalId])
-  @@index([name])
-  @@index([type])
-}
-
-model Contact {
-  id             String       @id @default(uuid()) @db.Uuid
-  externalId     String?
-  sourceVersion  String?
-  firstName      String
-  lastName       String
-  title          String?
-  department     String?
-  email          String?
-  phone          String?
-  linkedinUrl    String?
-  metadata       Json?
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
-  organizationId String       @db.Uuid
-  organization   Organization @relation(fields: [organizationId], references: [id])
-
-  @@index([email])
-  @@index([organizationId])
-  @@index([lastName])
-}
-
-model Job {
-  id                      String          @id @default(uuid()) @db.Uuid
-  externalId              String?
-  sourceVersion           String?
-  source                  JobSource?
-  organizationId          String          @db.Uuid
-  title                   String
-  slug                    String?         @unique
-  summary                 String?
-  description             String?
-  descriptionHtml         String?
-  responsibilities        String?
-  requirements            String?
-  preferredQualifications String?
-  benefits                String?
-  employmentType          EmploymentType?
-  workplaceType           WorkplaceType?
-  department              String?
-  seniority               String?
-  experienceMin           Int?
-  experienceMax           Int?
-  salaryMin               Decimal?
-  salaryMax               Decimal?
-  salaryCurrency          String?
-  location                String?
-  country                 String?
-  city                    String?
-  timezone                String?
-  remote                  Boolean?
-  openings                Int?
-  postedAt                DateTime?
-  expiresAt               DateTime?
-  status                  JobStatus       @default(IMPORTED)
-  applyUrl                String?
-  canonicalUrl            String?
-  metadata                Json?
-  createdAt               DateTime        @default(now())
-  updatedAt               DateTime        @updatedAt
-  organization            Organization    @relation(fields: [organizationId], references: [id])
-  applications            Application[]
-  jobSkills               JobSkill[]
-  documents               Document[]
-
-  @@unique([source, externalId])
-  @@index([externalId])
-  @@index([source])
-  @@index([organizationId])
-  @@index([status])
-  @@index([employmentType])
-  @@index([workplaceType])
-  @@index([postedAt])
-}
-
-model Candidate {
-  id                    String           @id @default(uuid()) @db.Uuid
-  externalId            String?
-  sourceVersion         String?
-  status                CandidateStatus  @default(NEW)
-  firstName             String
-  lastName              String
-  headline              String?
-  email                 String?
-  phone                 String?
-  linkedinUrl           String?
-  portfolioUrl          String?
-  githubUrl             String?
-  website               String?
-  currentTitle          String?
-  location              String?
-  country               String?
-  city                  String?
-  yearsExperience       Int?
-  workAuthorization     String?
-  availability          String?
-  desiredSalary         Decimal?
-  noticePeriod          Int?
-  summary               String?
-  metadata              Json?
-  currentOrganizationId String?          @db.Uuid
-  createdAt             DateTime         @default(now())
-  updatedAt             DateTime         @updatedAt
-  currentOrganization   Organization?    @relation(fields: [currentOrganizationId], references: [id])
-  applications          Application[]
-  candidateSkills       CandidateSkill[]
-  documents             Document[]
-
-  @@index([email])
-  @@index([lastName])
-  @@index([currentOrganizationId])
-}
-
-model Application {
-  id                String             @id @default(uuid()) @db.Uuid
-  externalId        String?
-  sourceVersion     String?
-  candidateId       String             @db.Uuid
-  jobId             String             @db.Uuid
-  status            ApplicationStatus  @default(APPLIED)
-  source            ApplicationSource?
-  coverLetter       String?
-  additionalNotes   String?
-  salaryExpectation Decimal?
-  noticePeriod      Int?
-  submittedAt       DateTime?
-  metadata          Json?
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
-  candidate         Candidate          @relation(fields: [candidateId], references: [id])
-  job               Job                @relation(fields: [jobId], references: [id])
-
-  @@unique([candidateId, jobId])
-  @@index([candidateId])
-  @@index([jobId])
-  @@index([status])
-}
-
-model Skill {
-  id                  String                    @id @default(uuid()) @db.Uuid
-  externalId          String?
-  sourceVersion       String?
-  name                String
-  metadata            Json?
-  createdAt           DateTime                  @default(now())
-  updatedAt           DateTime                  @updatedAt
-  candidateSkills     CandidateSkill[]
-  jobSkills           JobSkill[]
-  categoryAssignments SkillCategoryAssignment[]
-
-  @@unique([name])
-}
-
-model SkillCategory {
-  id            String                    @id @default(uuid()) @db.Uuid
-  externalId    String?
-  sourceVersion String?
-  name          String                    @unique
-  metadata      Json?
-  createdAt     DateTime                  @default(now())
-  updatedAt     DateTime                  @updatedAt
-  assignments   SkillCategoryAssignment[]
-}
-
-model SkillCategoryAssignment {
-  skillId    String        @db.Uuid
-  categoryId String        @db.Uuid
-  metadata   Json?
-  createdAt  DateTime      @default(now())
-  updatedAt  DateTime      @updatedAt
-  skill      Skill         @relation(fields: [skillId], references: [id])
-  category   SkillCategory @relation(fields: [categoryId], references: [id])
-
-  @@id([skillId, categoryId])
-  @@index([categoryId])
-}
-
-model CandidateSkill {
-  candidateId     String    @db.Uuid
-  skillId         String    @db.Uuid
-  yearsExperience Int?
-  proficiency     String?
-  verified        Boolean?
-  metadata        Json?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  candidate       Candidate @relation(fields: [candidateId], references: [id])
-  skill           Skill     @relation(fields: [skillId], references: [id])
-
-  @@id([candidateId, skillId])
-  @@index([skillId])
-}
-
-model JobSkill {
-  jobId     String   @db.Uuid
-  skillId   String   @db.Uuid
-  required  Boolean?
-  priority  Int?
-  metadata  Json?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  job       Job      @relation(fields: [jobId], references: [id])
-  skill     Skill    @relation(fields: [skillId], references: [id])
-
-  @@id([jobId, skillId])
-  @@index([skillId])
-}
-
-model Document {
-  id              String        @id @default(uuid()) @db.Uuid
-  externalId      String?
-  sourceVersion   String?
-  candidateId     String?       @db.Uuid
-  jobId           String?       @db.Uuid
-  organizationId  String?       @db.Uuid
-  type            DocumentType
-  storageProvider String?
-  storageKey      String?
-  fileName        String?
-  mimeType        String?
-  size            Int?
-  checksum        String?
-  version         Int           @default(1)
-  isLatest        Boolean?      @default(true)
-  uploadedBy      String?
-  metadata        Json?
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
-  candidate       Candidate?    @relation(fields: [candidateId], references: [id])
-  job             Job?          @relation(fields: [jobId], references: [id])
-  organization    Organization? @relation(fields: [organizationId], references: [id])
-
-  @@index([candidateId])
-  @@index([jobId])
-  @@index([organizationId])
-  @@index([type])
 }
