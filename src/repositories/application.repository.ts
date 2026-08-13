@@ -32,6 +32,7 @@ export interface CandidateData {
   linkedinUrl?: string | null;
   portfolioUrl?: string | null;
   githubUrl?: string | null;
+  location?: string | null;
   currentCompany?: string | null;
   currentTitle?: string | null;
   yearsExperience?: number | null;
@@ -46,6 +47,7 @@ export interface ApplicationData {
   submittedAt: Date;
   source: ApplicationSource;
   additionalNotes?: string | null;
+  coverLetter?: string | null;
   salaryExpectation?: number | null;
   noticePeriod?: number | null;
   metadata?: Prisma.InputJsonValue;
@@ -111,6 +113,10 @@ export class ApplicationRepository {
       if (candidateFields.githubUrl && candidateFields.githubUrl.trim()) {
         updateData.githubUrl = candidateFields.githubUrl.trim();
       }
+      if (candidateFields.location && candidateFields.location.trim()) {
+        updateData.location = candidateFields.location.trim();
+        updateData.city = candidateFields.location.trim();
+      }
       if (candidateFields.currentTitle && candidateFields.currentTitle.trim()) {
         updateData.currentTitle = candidateFields.currentTitle.trim();
       }
@@ -145,6 +151,10 @@ export class ApplicationRepository {
     return client.candidate.create({
       data: {
         ...candidateFields,
+        city:
+          candidateFields.location && candidateFields.location.trim()
+            ? candidateFields.location.trim()
+            : undefined,
         currentOrganizationId,
       },
     });
@@ -158,6 +168,7 @@ export class ApplicationRepository {
         status: data.status,
         submittedAt: data.submittedAt,
         source: data.source,
+        coverLetter: data.coverLetter,
         additionalNotes: data.additionalNotes,
         salaryExpectation: data.salaryExpectation,
         noticePeriod: data.noticePeriod,

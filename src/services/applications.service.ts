@@ -20,6 +20,9 @@ export interface CreateApplicationInput {
   githubUrl?: string;
   additionalNotes?: string;
   certifications?: string;
+  location?: string;
+  certificationAcknowledged?: boolean;
+  coverLetter?: string;
 }
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -95,6 +98,7 @@ export class ApplicationService {
           firstName: validated.firstName.trim(),
           lastName: validated.lastName.trim(),
           phone: validated.phone,
+          location: validated.location,
           linkedinUrl: validated.linkedinUrl,
           portfolioUrl: validated.portfolioUrl,
           githubUrl: validated.githubUrl,
@@ -111,18 +115,29 @@ export class ApplicationService {
           existingCandidate?.id,
         );
 
+        const metadata: Record<string, unknown> = {};
+        if (validated.certifications) {
+          metadata.certifications = validated.certifications;
+        }
+        if (validated.certificationAcknowledged !== undefined) {
+          metadata.certificationAcknowledged =
+            validated.certificationAcknowledged;
+        }
+
         return this.repository.createApplication(tx, {
           candidateId: candidate.id,
           jobId: validated.jobId,
           status: ApplicationStatus.APPLIED,
           submittedAt: new Date(),
           source: ApplicationSource.CAREERS_SITE,
+          coverLetter: validated.coverLetter,
           additionalNotes: validated.additionalNotes,
           salaryExpectation: validated.desiredSalary,
           noticePeriod: validated.noticePeriod,
-          metadata: validated.certifications
-            ? { certifications: validated.certifications }
-            : undefined,
+          metadata:
+            Object.keys(metadata).length > 0
+              ? (metadata as Prisma.InputJsonValue)
+              : undefined,
         });
       });
 
@@ -206,6 +221,12 @@ export class ApplicationService {
       githubUrl: sanitizeString(body.githubUrl),
       additionalNotes: sanitizeString(body.additionalNotes),
       certifications: sanitizeString(body.certifications),
+      location: sanitizeString(body.location),
+      certificationAcknowledged:
+        typeof body.certificationAcknowledged === "boolean"
+          ? body.certificationAcknowledged
+          : undefined,
+      coverLetter: sanitizeString(body.coverLetter),
     };
   }
 }

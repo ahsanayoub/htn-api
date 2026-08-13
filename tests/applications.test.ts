@@ -578,6 +578,343 @@ describe("ApplicationService.createApplication", () => {
     });
   });
 
+  describe("location handling", () => {
+    it("should persist location and city on candidate create", async () => {
+      mockTx.job.findUnique.mockResolvedValue(VALID_JOB);
+      mockTx.candidate.findFirst.mockResolvedValue(null);
+      mockTx.candidate.create.mockResolvedValue({
+        id: "candidate-1",
+        email: "john@example.com",
+      });
+      mockTx.application.create.mockResolvedValue({
+        id: "app-1",
+        candidateId: "candidate-1",
+        jobId: "job-123",
+        status: "APPLIED",
+        submittedAt: new Date(),
+        source: "CAREERS_SITE",
+        metadata: null,
+        candidate: {
+          id: "candidate-1",
+          firstName: "John",
+          lastName: "Doe",
+          email: "john@example.com",
+        },
+        job: { id: "job-123", title: "Senior Engineer", status: "ACTIVE" },
+      });
+
+      await service.createApplication({
+        jobId: "job-123",
+        firstName: "John",
+        lastName: "Doe",
+        email: "john@example.com",
+        location: "New York",
+      });
+
+      const createCall = mockTx.candidate.create.mock.calls[0][0];
+      expect(createCall.data.location).toBe("New York");
+      expect(createCall.data.city).toBe("New York");
+    });
+
+    it("should persist location and city on candidate update", async () => {
+      mockTx.job.findUnique.mockResolvedValue(VALID_JOB);
+      mockTx.candidate.findFirst.mockResolvedValue({
+        id: "candidate-1",
+        email: "john@example.com",
+      });
+      mockTx.application.findFirst.mockResolvedValue(null);
+      mockTx.candidate.update.mockResolvedValue({
+        id: "candidate-1",
+        email: "john@example.com",
+      });
+      mockTx.application.create.mockResolvedValue({
+        id: "app-1",
+        candidateId: "candidate-1",
+        jobId: "job-123",
+        status: "APPLIED",
+        submittedAt: new Date(),
+        source: "CAREERS_SITE",
+        metadata: null,
+        candidate: {
+          id: "candidate-1",
+          firstName: "John",
+          lastName: "Doe",
+          email: "john@example.com",
+        },
+        job: { id: "job-123", title: "Senior Engineer", status: "ACTIVE" },
+      });
+
+      await service.createApplication({
+        jobId: "job-123",
+        firstName: "John",
+        lastName: "Doe",
+        email: "john@example.com",
+        location: "San Francisco",
+      });
+
+      const updateCall = mockTx.candidate.update.mock.calls[0][0];
+      expect(updateCall.data.location).toBe("San Francisco");
+      expect(updateCall.data.city).toBe("San Francisco");
+    });
+
+    it("should not set location when not provided", async () => {
+      mockTx.job.findUnique.mockResolvedValue(VALID_JOB);
+      mockTx.candidate.findFirst.mockResolvedValue(null);
+      mockTx.candidate.create.mockResolvedValue({
+        id: "candidate-1",
+        email: "john@example.com",
+      });
+      mockTx.application.create.mockResolvedValue({
+        id: "app-1",
+        candidateId: "candidate-1",
+        jobId: "job-123",
+        status: "APPLIED",
+        submittedAt: new Date(),
+        source: "CAREERS_SITE",
+        metadata: null,
+        candidate: {
+          id: "candidate-1",
+          firstName: "John",
+          lastName: "Doe",
+          email: "john@example.com",
+        },
+        job: { id: "job-123", title: "Senior Engineer", status: "ACTIVE" },
+      });
+
+      await service.createApplication({
+        jobId: "job-123",
+        firstName: "John",
+        lastName: "Doe",
+        email: "john@example.com",
+      });
+
+      const createCall = mockTx.candidate.create.mock.calls[0][0];
+      expect(createCall.data.location).toBeUndefined();
+      expect(createCall.data.city).toBeUndefined();
+    });
+  });
+
+  describe("certificationAcknowledged handling", () => {
+    it("should store certificationAcknowledged in application metadata", async () => {
+      mockTx.job.findUnique.mockResolvedValue(VALID_JOB);
+      mockTx.candidate.findFirst.mockResolvedValue(null);
+      mockTx.candidate.create.mockResolvedValue({
+        id: "candidate-1",
+        email: "john@example.com",
+      });
+      mockTx.application.create.mockResolvedValue({
+        id: "app-1",
+        candidateId: "candidate-1",
+        jobId: "job-123",
+        status: "APPLIED",
+        submittedAt: new Date(),
+        source: "CAREERS_SITE",
+        metadata: null,
+        candidate: {
+          id: "candidate-1",
+          firstName: "John",
+          lastName: "Doe",
+          email: "john@example.com",
+        },
+        job: { id: "job-123", title: "Senior Engineer", status: "ACTIVE" },
+      });
+
+      await service.createApplication({
+        jobId: "job-123",
+        firstName: "John",
+        lastName: "Doe",
+        email: "john@example.com",
+        certificationAcknowledged: true,
+      });
+
+      const createCall = mockTx.application.create.mock.calls[0][0];
+      expect(createCall.data.metadata).toEqual({
+        certificationAcknowledged: true,
+      });
+    });
+
+    it("should store both certifications and certificationAcknowledged when both provided", async () => {
+      mockTx.job.findUnique.mockResolvedValue(VALID_JOB);
+      mockTx.candidate.findFirst.mockResolvedValue(null);
+      mockTx.candidate.create.mockResolvedValue({
+        id: "candidate-1",
+        email: "john@example.com",
+      });
+      mockTx.application.create.mockResolvedValue({
+        id: "app-1",
+        candidateId: "candidate-1",
+        jobId: "job-123",
+        status: "APPLIED",
+        submittedAt: new Date(),
+        source: "CAREERS_SITE",
+        metadata: null,
+        candidate: {
+          id: "candidate-1",
+          firstName: "John",
+          lastName: "Doe",
+          email: "john@example.com",
+        },
+        job: { id: "job-123", title: "Senior Engineer", status: "ACTIVE" },
+      });
+
+      await service.createApplication({
+        jobId: "job-123",
+        firstName: "John",
+        lastName: "Doe",
+        email: "john@example.com",
+        certifications: "AWS Certified",
+        certificationAcknowledged: true,
+      });
+
+      const createCall = mockTx.application.create.mock.calls[0][0];
+      expect(createCall.data.metadata).toEqual({
+        certifications: "AWS Certified",
+        certificationAcknowledged: true,
+      });
+    });
+  });
+
+  describe("coverLetter handling", () => {
+    it("should persist coverLetter on application", async () => {
+      mockTx.job.findUnique.mockResolvedValue(VALID_JOB);
+      mockTx.candidate.findFirst.mockResolvedValue(null);
+      mockTx.candidate.create.mockResolvedValue({
+        id: "candidate-1",
+        email: "john@example.com",
+      });
+      mockTx.application.create.mockResolvedValue({
+        id: "app-1",
+        candidateId: "candidate-1",
+        jobId: "job-123",
+        status: "APPLIED",
+        submittedAt: new Date(),
+        source: "CAREERS_SITE",
+        metadata: null,
+        candidate: {
+          id: "candidate-1",
+          firstName: "John",
+          lastName: "Doe",
+          email: "john@example.com",
+        },
+        job: { id: "job-123", title: "Senior Engineer", status: "ACTIVE" },
+      });
+
+      await service.createApplication({
+        jobId: "job-123",
+        firstName: "John",
+        lastName: "Doe",
+        email: "john@example.com",
+        coverLetter: "I am excited about this role...",
+      });
+
+      const createCall = mockTx.application.create.mock.calls[0][0];
+      expect(createCall.data.coverLetter).toBe(
+        "I am excited about this role...",
+      );
+    });
+
+    it("should set coverLetter to undefined when not provided", async () => {
+      mockTx.job.findUnique.mockResolvedValue(VALID_JOB);
+      mockTx.candidate.findFirst.mockResolvedValue(null);
+      mockTx.candidate.create.mockResolvedValue({
+        id: "candidate-1",
+        email: "john@example.com",
+      });
+      mockTx.application.create.mockResolvedValue({
+        id: "app-1",
+        candidateId: "candidate-1",
+        jobId: "job-123",
+        status: "APPLIED",
+        submittedAt: new Date(),
+        source: "CAREERS_SITE",
+        metadata: null,
+        candidate: {
+          id: "candidate-1",
+          firstName: "John",
+          lastName: "Doe",
+          email: "john@example.com",
+        },
+        job: { id: "job-123", title: "Senior Engineer", status: "ACTIVE" },
+      });
+
+      await service.createApplication({
+        jobId: "job-123",
+        firstName: "John",
+        lastName: "Doe",
+        email: "john@example.com",
+      });
+
+      const createCall = mockTx.application.create.mock.calls[0][0];
+      expect(createCall.data.coverLetter).toBeUndefined();
+    });
+  });
+
+  describe("full frontend payload", () => {
+    it("should accept the complete frontend apply form payload", async () => {
+      mockTx.job.findUnique.mockResolvedValue(VALID_JOB);
+      mockTx.candidate.findFirst.mockResolvedValue(null);
+      mockTx.candidate.create.mockResolvedValue({
+        id: "candidate-1",
+        email: "john@example.com",
+      });
+      mockTx.application.findFirst.mockResolvedValue(null);
+      mockTx.organization.findFirst.mockResolvedValue(null);
+      mockTx.organization.create.mockResolvedValue({ id: "org-1" });
+      mockTx.application.create.mockResolvedValue({
+        id: "app-1",
+        candidateId: "candidate-1",
+        jobId: "job-123",
+        status: "APPLIED",
+        submittedAt: new Date(),
+        source: "CAREERS_SITE",
+        metadata: null,
+        candidate: {
+          id: "candidate-1",
+          firstName: "John",
+          lastName: "Doe",
+          email: "john@example.com",
+        },
+        job: { id: "job-123", title: "Senior Engineer", status: "ACTIVE" },
+      });
+
+      await service.createApplication({
+        jobId: "job-123",
+        firstName: "John",
+        lastName: "Doe",
+        email: "john@example.com",
+        phone: "555-1234",
+        location: "New York",
+        linkedinUrl: "https://linkedin.com/in/john",
+        currentCompany: "Acme Corp",
+        currentTitle: "Engineer",
+        yearsExperience: 5,
+        desiredSalary: 80000,
+        noticePeriod: 2,
+        coverLetter: "Dear Hiring Manager...",
+        additionalNotes: "Available for interview next week",
+        certificationAcknowledged: true,
+      });
+
+      const candidateCreateCall = mockTx.candidate.create.mock.calls[0][0];
+      expect(candidateCreateCall.data.location).toBe("New York");
+      expect(candidateCreateCall.data.city).toBe("New York");
+      expect(candidateCreateCall.data.phone).toBe("555-1234");
+      expect(candidateCreateCall.data.currentTitle).toBe("Engineer");
+      expect(candidateCreateCall.data.yearsExperience).toBe(5);
+
+      const appCreateCall = mockTx.application.create.mock.calls[0][0];
+      expect(appCreateCall.data.coverLetter).toBe("Dear Hiring Manager...");
+      expect(appCreateCall.data.additionalNotes).toBe(
+        "Available for interview next week",
+      );
+      expect(appCreateCall.data.salaryExpectation).toBe(80000);
+      expect(appCreateCall.data.noticePeriod).toBe(2);
+      expect(appCreateCall.data.metadata).toEqual({
+        certificationAcknowledged: true,
+      });
+    });
+  });
+
   describe("internal error handling", () => {
     it("should convert unexpected errors to INTERNAL_ERROR without exposing details", async () => {
       mockTx.job.findUnique.mockResolvedValue(VALID_JOB);
