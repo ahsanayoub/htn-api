@@ -27,6 +27,8 @@ export interface CreateApplicationInput {
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function sanitizeString(value: unknown): string | undefined {
   if (typeof value === "string" && value.trim().length > 0) {
     return value.trim();
@@ -81,7 +83,7 @@ export class ApplicationService {
             await this.repository.findApplicationByCandidateAndJob(
               tx,
               existingCandidate.id,
-              validated.jobId,
+              job.id,
             );
 
           if (existingApp) {
@@ -126,7 +128,7 @@ export class ApplicationService {
 
         return this.repository.createApplication(tx, {
           candidateId: candidate.id,
-          jobId: validated.jobId,
+          jobId: job.id,
           status: ApplicationStatus.APPLIED,
           submittedAt: new Date(),
           source: ApplicationSource.CAREERS_SITE,
@@ -195,6 +197,16 @@ export class ApplicationService {
       );
     }
 
+    const jobId = (body.jobId as string).trim();
+
+    if (!UUID_REGEX.test(jobId)) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "Invalid jobId: must be a valid UUID",
+        400,
+      );
+    }
+
     const email = (body.email as string).trim().toLowerCase();
 
     if (!EMAIL_REGEX.test(email)) {
@@ -206,7 +218,7 @@ export class ApplicationService {
     }
 
     return {
-      jobId: (body.jobId as string).trim(),
+      jobId,
       firstName: (body.firstName as string).trim(),
       lastName: (body.lastName as string).trim(),
       email,

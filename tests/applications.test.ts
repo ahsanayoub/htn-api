@@ -5,7 +5,7 @@ import { AppError } from "../src/errors/app-error.js";
 
 const { mockTx, mockTransaction } = vi.hoisted(() => {
   const mockTx = {
-    job: { findUnique: vi.fn() },
+    job: { findFirst: vi.fn() },
     candidate: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn() },
     application: { findFirst: vi.fn(), create: vi.fn() },
     organization: { findFirst: vi.fn(), create: vi.fn() },
@@ -18,7 +18,15 @@ vi.mock("../src/prisma/client.js", () => ({
   default: { $transaction: mockTransaction },
 }));
 
-const VALID_JOB = { id: "job-123", title: "Senior Engineer", status: "ACTIVE" };
+// What the frontend sends (the externalId exposed by GET /api/jobs/:jobId)
+const EXTERNAL_JOB_ID = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
+// The internal primary key of the Job row (what Application.jobId FK references)
+const INTERNAL_JOB_ID = "123e4567-e89b-12d3-a456-426614174000";
+const VALID_JOB = {
+  id: INTERNAL_JOB_ID,
+  title: "Senior Engineer",
+  status: "ACTIVE",
+};
 
 function captureError(promise: Promise<unknown>): Promise<AppError> {
   return promise.catch((e: unknown) => e) as Promise<AppError>;
@@ -29,7 +37,7 @@ describe("ApplicationService.createApplication", () => {
 
   beforeEach(() => {
     mockTransaction.mockClear();
-    mockTx.job.findUnique.mockReset();
+    mockTx.job.findFirst.mockReset();
     mockTx.candidate.findFirst.mockReset();
     mockTx.candidate.create.mockReset();
     mockTx.candidate.update.mockReset();
@@ -39,20 +47,18 @@ describe("ApplicationService.createApplication", () => {
     mockTx.organization.create.mockReset();
   });
 
-  describe("happy path", () => {
-    it("should create a new candidate and application when candidate does not exist", async () => {
-      mockTx.job.findUnique.mockResolvedValue(VALID_JOB);
+  describe("regression: resolves job by externalId (matches GET /api/jobs/:jobId)", () => {
+    it("looks the job up by externalId, not the internal id", async () => {
+      mockTx.job.findFirst.mockResolvedValue(VALID_JOB);
       mockTx.candidate.findFirst.mockResolvedValue(null);
       mockTx.candidate.create.mockResolvedValue({
         id: "candidate-1",
         email: "john@example.com",
-        firstName: "John",
-        lastName: "Doe",
       });
       mockTx.application.create.mockResolvedValue({
         id: "app-1",
         candidateId: "candidate-1",
-        jobId: "job-123",
+        jobId: INTERNAL_JOB_ID,
         status: "APPLIED",
         submittedAt: new Date(),
         source: "CAREERS_SITE",
@@ -63,11 +69,90 @@ describe("ApplicationService.createApplication", () => {
           lastName: "Doe",
           email: "john@example.com",
         },
-        job: { id: "job-123", title: "Senior Engineer", status: "ACTIVE" },
+        job: { id: INTERNAL_JOB_ID, title: "Senior Engineer", status: "ACTIVE" },
+      });
+
+      await service.createApplication({
+        jobId: EXTERNAL_JOB_ID,
+        firstName: "John",
+        lastName: "Doe",
+        email: "john@example.com",
+      });
+
+      expect(mockTx.job.findFirst).toHaveBeenCalledOnce();
+      expect(mockTx.job.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { externalId: EXTERNAL_JOB_ID },
+          select: { id: true, title: true, status: true },
+        }),
+      );
+    });
+
+    it("stores the resolved internal job.id (not the externalId) on the application", async () => {
+      mockTx.job.findFirst.mockResolvedValue(VALID_JOB);
+      mockTx.candidate.findFirst.mockResolvedValue(null);
+      mockTx.candidate.create.mockResolvedValue({
+        id: "candidate-1",
+        email: "john@example.com",
+      });
+      mockTx.application.create.mockResolvedValue({
+        id: "app-1",
+        candidateId: "candidate-1",
+        jobId: INTERNAL_JOB_ID,
+        status: "APPLIED",
+        submittedAt: new Date(),
+        source: "CAREERS_SITE",
+        metadata: null,
+        candidate: {
+          id: "candidate-1",
+          firstName: "John",
+          lastName: "Doe",
+          email: "john@example.com",
+        },
+        job: { id: INTERNAL_JOB_ID, title: "Senior Engineer", status: "ACTIVE" },
+      });
+
+      await service.createApplication({
+        jobId: EXTERNAL_JOB_ID,
+        firstName: "John",
+        lastName: "Doe",
+        email: "john@example.com",
+      });
+
+      const createCall = mockTx.application.create.mock.calls[0][0];
+      expect(createCall.data.jobId).toBe(INTERNAL_JOB_ID);
+    });
+  });
+
+  describe("happy path", () => {
+    it("should create a new candidate and application when candidate does not exist", async () => {
+      mockTx.job.findFirst.mockResolvedValue(VALID_JOB);
+      mockTx.candidate.findFirst.mockResolvedValue(null);
+      mockTx.candidate.create.mockResolvedValue({
+        id: "candidate-1",
+        email: "john@example.com",
+        firstName: "John",
+        lastName: "Doe",
+      });
+      mockTx.application.create.mockResolvedValue({
+        id: "app-1",
+        candidateId: "candidate-1",
+        jobId: INTERNAL_JOB_ID,
+        status: "APPLIED",
+        submittedAt: new Date(),
+        source: "CAREERS_SITE",
+        metadata: null,
+        candidate: {
+          id: "candidate-1",
+          firstName: "John",
+          lastName: "Doe",
+          email: "john@example.com",
+        },
+        job: { id: INTERNAL_JOB_ID, title: "Senior Engineer", status: "ACTIVE" },
       });
 
       const result = await service.createApplication({
-        jobId: "job-123",
+        jobId: EXTERNAL_JOB_ID,
         firstName: "John",
         lastName: "Doe",
         email: "john@example.com",
@@ -80,7 +165,7 @@ describe("ApplicationService.createApplication", () => {
     });
 
     it("should update existing candidate and create a new application when candidate exists", async () => {
-      mockTx.job.findUnique.mockResolvedValue(VALID_JOB);
+      mockTx.job.findFirst.mockResolvedValue(VALID_JOB);
       mockTx.candidate.findFirst.mockResolvedValue({
         id: "candidate-existing",
         email: "john@example.com",
@@ -97,7 +182,7 @@ describe("ApplicationService.createApplication", () => {
       mockTx.application.create.mockResolvedValue({
         id: "app-2",
         candidateId: "candidate-existing",
-        jobId: "job-123",
+        jobId: INTERNAL_JOB_ID,
         status: "APPLIED",
         submittedAt: new Date(),
         source: "CAREERS_SITE",
@@ -108,11 +193,11 @@ describe("ApplicationService.createApplication", () => {
           lastName: "Doe",
           email: "john@example.com",
         },
-        job: { id: "job-123", title: "Senior Engineer", status: "ACTIVE" },
+        job: { id: INTERNAL_JOB_ID, title: "Senior Engineer", status: "ACTIVE" },
       });
 
       const result = await service.createApplication({
-        jobId: "job-123",
+        jobId: EXTERNAL_JOB_ID,
         firstName: "Johnny",
         lastName: "Doe",
         email: "john@example.com",
@@ -127,7 +212,7 @@ describe("ApplicationService.createApplication", () => {
 
   describe("duplicate application", () => {
     it("should return ALREADY_APPLIED when candidate already applied to the job", async () => {
-      mockTx.job.findUnique.mockResolvedValue(VALID_JOB);
+      mockTx.job.findFirst.mockResolvedValue(VALID_JOB);
       mockTx.candidate.findFirst.mockResolvedValue({
         id: "candidate-1",
         email: "john@example.com",
@@ -136,7 +221,7 @@ describe("ApplicationService.createApplication", () => {
 
       const error = await captureError(
         service.createApplication({
-          jobId: "job-123",
+          jobId: EXTERNAL_JOB_ID,
           firstName: "John",
           lastName: "Doe",
           email: "john@example.com",
@@ -152,7 +237,7 @@ describe("ApplicationService.createApplication", () => {
     });
 
     it("should return ALREADY_APPLIED on P2002 unique constraint violation (race condition)", async () => {
-      mockTx.job.findUnique.mockResolvedValue(VALID_JOB);
+      mockTx.job.findFirst.mockResolvedValue(VALID_JOB);
       mockTx.candidate.findFirst.mockResolvedValue({
         id: "candidate-1",
         email: "john@example.com",
@@ -173,7 +258,7 @@ describe("ApplicationService.createApplication", () => {
 
       const error = await captureError(
         service.createApplication({
-          jobId: "job-123",
+          jobId: EXTERNAL_JOB_ID,
           firstName: "John",
           lastName: "Doe",
           email: "john@example.com",
@@ -187,11 +272,11 @@ describe("ApplicationService.createApplication", () => {
 
   describe("job validation", () => {
     it("should return JOB_NOT_FOUND when job does not exist", async () => {
-      mockTx.job.findUnique.mockResolvedValue(null);
+      mockTx.job.findFirst.mockResolvedValue(null);
 
       const error = await captureError(
         service.createApplication({
-          jobId: "nonexistent-job",
+          jobId: EXTERNAL_JOB_ID,
           firstName: "John",
           lastName: "Doe",
           email: "john@example.com",
@@ -203,15 +288,15 @@ describe("ApplicationService.createApplication", () => {
     });
 
     it("should reject applications to a CLOSED job", async () => {
-      mockTx.job.findUnique.mockResolvedValue({
-        id: "job-123",
+      mockTx.job.findFirst.mockResolvedValue({
+        id: INTERNAL_JOB_ID,
         title: "Senior Engineer",
         status: "CLOSED",
       });
 
       const error = await captureError(
         service.createApplication({
-          jobId: "job-123",
+          jobId: EXTERNAL_JOB_ID,
           firstName: "John",
           lastName: "Doe",
           email: "john@example.com",
@@ -224,15 +309,15 @@ describe("ApplicationService.createApplication", () => {
     });
 
     it("should reject applications to an ARCHIVED job", async () => {
-      mockTx.job.findUnique.mockResolvedValue({
-        id: "job-123",
+      mockTx.job.findFirst.mockResolvedValue({
+        id: INTERNAL_JOB_ID,
         title: "Senior Engineer",
         status: "ARCHIVED",
       });
 
       const error = await captureError(
         service.createApplication({
-          jobId: "job-123",
+          jobId: EXTERNAL_JOB_ID,
           firstName: "John",
           lastName: "Doe",
           email: "john@example.com",
@@ -244,8 +329,8 @@ describe("ApplicationService.createApplication", () => {
     });
 
     it("should allow applications to a job that is not CLOSED or ARCHIVED", async () => {
-      mockTx.job.findUnique.mockResolvedValue({
-        id: "job-123",
+      mockTx.job.findFirst.mockResolvedValue({
+        id: INTERNAL_JOB_ID,
         title: "Engineer",
         status: "ACTIVE",
       });
@@ -257,23 +342,44 @@ describe("ApplicationService.createApplication", () => {
       mockTx.application.create.mockResolvedValue({
         id: "app-1",
         candidateId: "candidate-1",
-        jobId: "job-123",
+        jobId: INTERNAL_JOB_ID,
         status: "APPLIED",
         submittedAt: new Date(),
         source: "CAREERS_SITE",
         metadata: null,
         candidate: { id: "candidate-1", firstName: "John", lastName: "Doe", email: "john@example.com" },
-        job: { id: "job-123", title: "Engineer", status: "ACTIVE" },
+        job: { id: INTERNAL_JOB_ID, title: "Engineer", status: "ACTIVE" },
       });
 
       const result = await service.createApplication({
-        jobId: "job-123",
+        jobId: EXTERNAL_JOB_ID,
         firstName: "John",
         lastName: "Doe",
         email: "john@example.com",
       });
 
       expect(result.id).toBe("app-1");
+    });
+  });
+
+  describe("jobId format validation", () => {
+    it("should reject a malformed/non-UUID jobId as VALIDATION_ERROR (400) instead of 500", async () => {
+      const error = await captureError(
+        service.createApplication({
+          jobId: "not-a-uuid",
+          firstName: "John",
+          lastName: "Doe",
+          email: "john@example.com",
+        }),
+      );
+
+      expect(error).toBeInstanceOf(AppError);
+      expect(error.code).toBe("VALIDATION_ERROR");
+      expect(error.statusCode).toBe(400);
+      expect(error.message).toContain("Invalid jobId");
+      // Must not reach the database
+      expect(mockTx.job.findFirst).not.toHaveBeenCalled();
+      expect(mockTx.application.create).not.toHaveBeenCalled();
     });
   });
 
@@ -298,7 +404,7 @@ describe("ApplicationService.createApplication", () => {
     it("should reject when email is invalid", async () => {
       const error = await captureError(
         service.createApplication({
-          jobId: "job-123",
+          jobId: EXTERNAL_JOB_ID,
           firstName: "John",
           lastName: "Doe",
           email: "not-an-email",
@@ -313,7 +419,7 @@ describe("ApplicationService.createApplication", () => {
 
   describe("email normalization", () => {
     it("should normalize email by trimming and lowercasing", async () => {
-      mockTx.job.findUnique.mockResolvedValue(VALID_JOB);
+      mockTx.job.findFirst.mockResolvedValue(VALID_JOB);
       mockTx.candidate.findFirst.mockResolvedValue(null);
       mockTx.candidate.create.mockResolvedValue({
         id: "candidate-1",
@@ -322,17 +428,17 @@ describe("ApplicationService.createApplication", () => {
       mockTx.application.create.mockResolvedValue({
         id: "app-1",
         candidateId: "candidate-1",
-        jobId: "job-123",
+        jobId: INTERNAL_JOB_ID,
         status: "APPLIED",
         submittedAt: new Date(),
         source: "CAREERS_SITE",
         metadata: null,
         candidate: { id: "candidate-1", firstName: "John", lastName: "Doe", email: "john@example.com" },
-        job: { id: "job-123", title: "Senior Engineer", status: "ACTIVE" },
+        job: { id: INTERNAL_JOB_ID, title: "Senior Engineer", status: "ACTIVE" },
       });
 
       await service.createApplication({
-        jobId: "job-123",
+        jobId: EXTERNAL_JOB_ID,
         firstName: "John",
         lastName: "Doe",
         email: "  JOHN@EXAMPLE.COM  ",
@@ -353,7 +459,7 @@ describe("ApplicationService.createApplication", () => {
 
   describe("empty optional fields", () => {
     it("should not store empty strings for optional fields on candidate create", async () => {
-      mockTx.job.findUnique.mockResolvedValue(VALID_JOB);
+      mockTx.job.findFirst.mockResolvedValue(VALID_JOB);
       mockTx.candidate.findFirst.mockResolvedValue(null);
       mockTx.candidate.create.mockResolvedValue({
         id: "candidate-1",
@@ -362,17 +468,17 @@ describe("ApplicationService.createApplication", () => {
       mockTx.application.create.mockResolvedValue({
         id: "app-1",
         candidateId: "candidate-1",
-        jobId: "job-123",
+        jobId: INTERNAL_JOB_ID,
         status: "APPLIED",
         submittedAt: new Date(),
         source: "CAREERS_SITE",
         metadata: null,
         candidate: { id: "candidate-1", firstName: "John", lastName: "Doe", email: "john@example.com" },
-        job: { id: "job-123", title: "Senior Engineer", status: "ACTIVE" },
+        job: { id: INTERNAL_JOB_ID, title: "Senior Engineer", status: "ACTIVE" },
       });
 
       await service.createApplication({
-        jobId: "job-123",
+        jobId: EXTERNAL_JOB_ID,
         firstName: "John",
         lastName: "Doe",
         email: "john@example.com",
@@ -394,7 +500,7 @@ describe("ApplicationService.createApplication", () => {
 
   describe("candidate field preservation", () => {
     it("should not overwrite existing candidate fields with empty values", async () => {
-      mockTx.job.findUnique.mockResolvedValue(VALID_JOB);
+      mockTx.job.findFirst.mockResolvedValue(VALID_JOB);
       mockTx.candidate.findFirst.mockResolvedValue({
         id: "candidate-1",
         email: "john@example.com",
@@ -410,17 +516,17 @@ describe("ApplicationService.createApplication", () => {
       mockTx.application.create.mockResolvedValue({
         id: "app-1",
         candidateId: "candidate-1",
-        jobId: "job-123",
+        jobId: INTERNAL_JOB_ID,
         status: "APPLIED",
         submittedAt: new Date(),
         source: "CAREERS_SITE",
         metadata: null,
         candidate: { id: "candidate-1", firstName: "John", lastName: "Doe", email: "john@example.com" },
-        job: { id: "job-123", title: "Senior Engineer", status: "ACTIVE" },
+        job: { id: INTERNAL_JOB_ID, title: "Senior Engineer", status: "ACTIVE" },
       });
 
       await service.createApplication({
-        jobId: "job-123",
+        jobId: EXTERNAL_JOB_ID,
         firstName: "John",
         lastName: "Doe",
         email: "john@example.com",
@@ -436,7 +542,7 @@ describe("ApplicationService.createApplication", () => {
     });
 
     it("should overwrite existing candidate fields when new non-empty values are provided", async () => {
-      mockTx.job.findUnique.mockResolvedValue(VALID_JOB);
+      mockTx.job.findFirst.mockResolvedValue(VALID_JOB);
       mockTx.candidate.findFirst.mockResolvedValue({
         id: "candidate-1",
         email: "john@example.com",
@@ -451,17 +557,17 @@ describe("ApplicationService.createApplication", () => {
       mockTx.application.create.mockResolvedValue({
         id: "app-1",
         candidateId: "candidate-1",
-        jobId: "job-123",
+        jobId: INTERNAL_JOB_ID,
         status: "APPLIED",
         submittedAt: new Date(),
         source: "CAREERS_SITE",
         metadata: null,
         candidate: { id: "candidate-1", firstName: "John", lastName: "Doe", email: "john@example.com" },
-        job: { id: "job-123", title: "Senior Engineer", status: "ACTIVE" },
+        job: { id: INTERNAL_JOB_ID, title: "Senior Engineer", status: "ACTIVE" },
       });
 
       await service.createApplication({
-        jobId: "job-123",
+        jobId: EXTERNAL_JOB_ID,
         firstName: "John",
         lastName: "Doe",
         email: "john@example.com",
@@ -477,7 +583,7 @@ describe("ApplicationService.createApplication", () => {
 
   describe("client cannot set protected fields", () => {
     it("should not allow client to set application status", async () => {
-      mockTx.job.findUnique.mockResolvedValue(VALID_JOB);
+      mockTx.job.findFirst.mockResolvedValue(VALID_JOB);
       mockTx.candidate.findFirst.mockResolvedValue(null);
       mockTx.candidate.create.mockResolvedValue({
         id: "candidate-1",
@@ -486,17 +592,17 @@ describe("ApplicationService.createApplication", () => {
       mockTx.application.create.mockResolvedValue({
         id: "app-1",
         candidateId: "candidate-1",
-        jobId: "job-123",
+        jobId: INTERNAL_JOB_ID,
         status: "APPLIED",
         submittedAt: new Date(),
         source: "CAREERS_SITE",
         metadata: null,
         candidate: { id: "candidate-1", firstName: "John", lastName: "Doe", email: "john@example.com" },
-        job: { id: "job-123", title: "Senior Engineer", status: "ACTIVE" },
+        job: { id: INTERNAL_JOB_ID, title: "Senior Engineer", status: "ACTIVE" },
       });
 
       await service.createApplication({
-        jobId: "job-123",
+        jobId: EXTERNAL_JOB_ID,
         firstName: "John",
         lastName: "Doe",
         email: "john@example.com",
@@ -515,7 +621,7 @@ describe("ApplicationService.createApplication", () => {
 
   describe("certifications stored in metadata", () => {
     it("should store certifications in application metadata", async () => {
-      mockTx.job.findUnique.mockResolvedValue(VALID_JOB);
+      mockTx.job.findFirst.mockResolvedValue(VALID_JOB);
       mockTx.candidate.findFirst.mockResolvedValue(null);
       mockTx.candidate.create.mockResolvedValue({
         id: "candidate-1",
@@ -524,17 +630,17 @@ describe("ApplicationService.createApplication", () => {
       mockTx.application.create.mockResolvedValue({
         id: "app-1",
         candidateId: "candidate-1",
-        jobId: "job-123",
+        jobId: INTERNAL_JOB_ID,
         status: "APPLIED",
         submittedAt: new Date(),
         source: "CAREERS_SITE",
         metadata: { certifications: "AWS Certified, Google Cloud" },
         candidate: { id: "candidate-1", firstName: "John", lastName: "Doe", email: "john@example.com" },
-        job: { id: "job-123", title: "Senior Engineer", status: "ACTIVE" },
+        job: { id: INTERNAL_JOB_ID, title: "Senior Engineer", status: "ACTIVE" },
       });
 
       await service.createApplication({
-        jobId: "job-123",
+        jobId: EXTERNAL_JOB_ID,
         firstName: "John",
         lastName: "Doe",
         email: "john@example.com",
@@ -548,7 +654,7 @@ describe("ApplicationService.createApplication", () => {
     });
 
     it("should set metadata to undefined when certifications are not provided", async () => {
-      mockTx.job.findUnique.mockResolvedValue(VALID_JOB);
+      mockTx.job.findFirst.mockResolvedValue(VALID_JOB);
       mockTx.candidate.findFirst.mockResolvedValue(null);
       mockTx.candidate.create.mockResolvedValue({
         id: "candidate-1",
@@ -557,17 +663,17 @@ describe("ApplicationService.createApplication", () => {
       mockTx.application.create.mockResolvedValue({
         id: "app-1",
         candidateId: "candidate-1",
-        jobId: "job-123",
+        jobId: INTERNAL_JOB_ID,
         status: "APPLIED",
         submittedAt: new Date(),
         source: "CAREERS_SITE",
         metadata: null,
         candidate: { id: "candidate-1", firstName: "John", lastName: "Doe", email: "john@example.com" },
-        job: { id: "job-123", title: "Senior Engineer", status: "ACTIVE" },
+        job: { id: INTERNAL_JOB_ID, title: "Senior Engineer", status: "ACTIVE" },
       });
 
       await service.createApplication({
-        jobId: "job-123",
+        jobId: EXTERNAL_JOB_ID,
         firstName: "John",
         lastName: "Doe",
         email: "john@example.com",
@@ -580,7 +686,7 @@ describe("ApplicationService.createApplication", () => {
 
   describe("location handling", () => {
     it("should persist location and city on candidate create", async () => {
-      mockTx.job.findUnique.mockResolvedValue(VALID_JOB);
+      mockTx.job.findFirst.mockResolvedValue(VALID_JOB);
       mockTx.candidate.findFirst.mockResolvedValue(null);
       mockTx.candidate.create.mockResolvedValue({
         id: "candidate-1",
@@ -589,7 +695,7 @@ describe("ApplicationService.createApplication", () => {
       mockTx.application.create.mockResolvedValue({
         id: "app-1",
         candidateId: "candidate-1",
-        jobId: "job-123",
+        jobId: INTERNAL_JOB_ID,
         status: "APPLIED",
         submittedAt: new Date(),
         source: "CAREERS_SITE",
@@ -600,11 +706,11 @@ describe("ApplicationService.createApplication", () => {
           lastName: "Doe",
           email: "john@example.com",
         },
-        job: { id: "job-123", title: "Senior Engineer", status: "ACTIVE" },
+        job: { id: INTERNAL_JOB_ID, title: "Senior Engineer", status: "ACTIVE" },
       });
 
       await service.createApplication({
-        jobId: "job-123",
+        jobId: EXTERNAL_JOB_ID,
         firstName: "John",
         lastName: "Doe",
         email: "john@example.com",
@@ -617,7 +723,7 @@ describe("ApplicationService.createApplication", () => {
     });
 
     it("should persist location and city on candidate update", async () => {
-      mockTx.job.findUnique.mockResolvedValue(VALID_JOB);
+      mockTx.job.findFirst.mockResolvedValue(VALID_JOB);
       mockTx.candidate.findFirst.mockResolvedValue({
         id: "candidate-1",
         email: "john@example.com",
@@ -630,7 +736,7 @@ describe("ApplicationService.createApplication", () => {
       mockTx.application.create.mockResolvedValue({
         id: "app-1",
         candidateId: "candidate-1",
-        jobId: "job-123",
+        jobId: INTERNAL_JOB_ID,
         status: "APPLIED",
         submittedAt: new Date(),
         source: "CAREERS_SITE",
@@ -641,11 +747,11 @@ describe("ApplicationService.createApplication", () => {
           lastName: "Doe",
           email: "john@example.com",
         },
-        job: { id: "job-123", title: "Senior Engineer", status: "ACTIVE" },
+        job: { id: INTERNAL_JOB_ID, title: "Senior Engineer", status: "ACTIVE" },
       });
 
       await service.createApplication({
-        jobId: "job-123",
+        jobId: EXTERNAL_JOB_ID,
         firstName: "John",
         lastName: "Doe",
         email: "john@example.com",
@@ -658,7 +764,7 @@ describe("ApplicationService.createApplication", () => {
     });
 
     it("should not set location when not provided", async () => {
-      mockTx.job.findUnique.mockResolvedValue(VALID_JOB);
+      mockTx.job.findFirst.mockResolvedValue(VALID_JOB);
       mockTx.candidate.findFirst.mockResolvedValue(null);
       mockTx.candidate.create.mockResolvedValue({
         id: "candidate-1",
@@ -667,7 +773,7 @@ describe("ApplicationService.createApplication", () => {
       mockTx.application.create.mockResolvedValue({
         id: "app-1",
         candidateId: "candidate-1",
-        jobId: "job-123",
+        jobId: INTERNAL_JOB_ID,
         status: "APPLIED",
         submittedAt: new Date(),
         source: "CAREERS_SITE",
@@ -678,11 +784,11 @@ describe("ApplicationService.createApplication", () => {
           lastName: "Doe",
           email: "john@example.com",
         },
-        job: { id: "job-123", title: "Senior Engineer", status: "ACTIVE" },
+        job: { id: INTERNAL_JOB_ID, title: "Senior Engineer", status: "ACTIVE" },
       });
 
       await service.createApplication({
-        jobId: "job-123",
+        jobId: EXTERNAL_JOB_ID,
         firstName: "John",
         lastName: "Doe",
         email: "john@example.com",
@@ -696,7 +802,7 @@ describe("ApplicationService.createApplication", () => {
 
   describe("certificationAcknowledged handling", () => {
     it("should store certificationAcknowledged in application metadata", async () => {
-      mockTx.job.findUnique.mockResolvedValue(VALID_JOB);
+      mockTx.job.findFirst.mockResolvedValue(VALID_JOB);
       mockTx.candidate.findFirst.mockResolvedValue(null);
       mockTx.candidate.create.mockResolvedValue({
         id: "candidate-1",
@@ -705,7 +811,7 @@ describe("ApplicationService.createApplication", () => {
       mockTx.application.create.mockResolvedValue({
         id: "app-1",
         candidateId: "candidate-1",
-        jobId: "job-123",
+        jobId: INTERNAL_JOB_ID,
         status: "APPLIED",
         submittedAt: new Date(),
         source: "CAREERS_SITE",
@@ -716,11 +822,11 @@ describe("ApplicationService.createApplication", () => {
           lastName: "Doe",
           email: "john@example.com",
         },
-        job: { id: "job-123", title: "Senior Engineer", status: "ACTIVE" },
+        job: { id: INTERNAL_JOB_ID, title: "Senior Engineer", status: "ACTIVE" },
       });
 
       await service.createApplication({
-        jobId: "job-123",
+        jobId: EXTERNAL_JOB_ID,
         firstName: "John",
         lastName: "Doe",
         email: "john@example.com",
@@ -734,7 +840,7 @@ describe("ApplicationService.createApplication", () => {
     });
 
     it("should store both certifications and certificationAcknowledged when both provided", async () => {
-      mockTx.job.findUnique.mockResolvedValue(VALID_JOB);
+      mockTx.job.findFirst.mockResolvedValue(VALID_JOB);
       mockTx.candidate.findFirst.mockResolvedValue(null);
       mockTx.candidate.create.mockResolvedValue({
         id: "candidate-1",
@@ -743,7 +849,7 @@ describe("ApplicationService.createApplication", () => {
       mockTx.application.create.mockResolvedValue({
         id: "app-1",
         candidateId: "candidate-1",
-        jobId: "job-123",
+        jobId: INTERNAL_JOB_ID,
         status: "APPLIED",
         submittedAt: new Date(),
         source: "CAREERS_SITE",
@@ -754,11 +860,11 @@ describe("ApplicationService.createApplication", () => {
           lastName: "Doe",
           email: "john@example.com",
         },
-        job: { id: "job-123", title: "Senior Engineer", status: "ACTIVE" },
+        job: { id: INTERNAL_JOB_ID, title: "Senior Engineer", status: "ACTIVE" },
       });
 
       await service.createApplication({
-        jobId: "job-123",
+        jobId: EXTERNAL_JOB_ID,
         firstName: "John",
         lastName: "Doe",
         email: "john@example.com",
@@ -776,7 +882,7 @@ describe("ApplicationService.createApplication", () => {
 
   describe("coverLetter handling", () => {
     it("should persist coverLetter on application", async () => {
-      mockTx.job.findUnique.mockResolvedValue(VALID_JOB);
+      mockTx.job.findFirst.mockResolvedValue(VALID_JOB);
       mockTx.candidate.findFirst.mockResolvedValue(null);
       mockTx.candidate.create.mockResolvedValue({
         id: "candidate-1",
@@ -785,7 +891,7 @@ describe("ApplicationService.createApplication", () => {
       mockTx.application.create.mockResolvedValue({
         id: "app-1",
         candidateId: "candidate-1",
-        jobId: "job-123",
+        jobId: INTERNAL_JOB_ID,
         status: "APPLIED",
         submittedAt: new Date(),
         source: "CAREERS_SITE",
@@ -796,11 +902,11 @@ describe("ApplicationService.createApplication", () => {
           lastName: "Doe",
           email: "john@example.com",
         },
-        job: { id: "job-123", title: "Senior Engineer", status: "ACTIVE" },
+        job: { id: INTERNAL_JOB_ID, title: "Senior Engineer", status: "ACTIVE" },
       });
 
       await service.createApplication({
-        jobId: "job-123",
+        jobId: EXTERNAL_JOB_ID,
         firstName: "John",
         lastName: "Doe",
         email: "john@example.com",
@@ -814,7 +920,7 @@ describe("ApplicationService.createApplication", () => {
     });
 
     it("should set coverLetter to undefined when not provided", async () => {
-      mockTx.job.findUnique.mockResolvedValue(VALID_JOB);
+      mockTx.job.findFirst.mockResolvedValue(VALID_JOB);
       mockTx.candidate.findFirst.mockResolvedValue(null);
       mockTx.candidate.create.mockResolvedValue({
         id: "candidate-1",
@@ -823,7 +929,7 @@ describe("ApplicationService.createApplication", () => {
       mockTx.application.create.mockResolvedValue({
         id: "app-1",
         candidateId: "candidate-1",
-        jobId: "job-123",
+        jobId: INTERNAL_JOB_ID,
         status: "APPLIED",
         submittedAt: new Date(),
         source: "CAREERS_SITE",
@@ -834,11 +940,11 @@ describe("ApplicationService.createApplication", () => {
           lastName: "Doe",
           email: "john@example.com",
         },
-        job: { id: "job-123", title: "Senior Engineer", status: "ACTIVE" },
+        job: { id: INTERNAL_JOB_ID, title: "Senior Engineer", status: "ACTIVE" },
       });
 
       await service.createApplication({
-        jobId: "job-123",
+        jobId: EXTERNAL_JOB_ID,
         firstName: "John",
         lastName: "Doe",
         email: "john@example.com",
@@ -849,9 +955,45 @@ describe("ApplicationService.createApplication", () => {
     });
   });
 
+  describe("minimal frontend payload", () => {
+    it("should accept the minimal required-field payload (4 fields)", async () => {
+      mockTx.job.findFirst.mockResolvedValue(VALID_JOB);
+      mockTx.candidate.findFirst.mockResolvedValue(null);
+      mockTx.candidate.create.mockResolvedValue({
+        id: "candidate-1",
+        email: "john@example.com",
+      });
+      mockTx.application.create.mockResolvedValue({
+        id: "app-1",
+        candidateId: "candidate-1",
+        jobId: INTERNAL_JOB_ID,
+        status: "APPLIED",
+        submittedAt: new Date(),
+        source: "CAREERS_SITE",
+        metadata: undefined,
+        candidate: { id: "candidate-1", firstName: "John", lastName: "Doe", email: "john@example.com" },
+        job: { id: INTERNAL_JOB_ID, title: "Senior Engineer", status: "ACTIVE" },
+      });
+
+      const result = await service.createApplication({
+        jobId: EXTERNAL_JOB_ID,
+        firstName: "John",
+        lastName: "Doe",
+        email: "john@example.com",
+      });
+
+      expect(result.id).toBe("app-1");
+      const createCall = mockTx.application.create.mock.calls[0][0];
+      expect(createCall.data.jobId).toBe(INTERNAL_JOB_ID);
+      expect(createCall.data.status).toBe("APPLIED");
+      expect(createCall.data.source).toBe("CAREERS_SITE");
+      expect(createCall.data.submittedAt).toBeInstanceOf(Date);
+    });
+  });
+
   describe("full frontend payload", () => {
     it("should accept the complete frontend apply form payload", async () => {
-      mockTx.job.findUnique.mockResolvedValue(VALID_JOB);
+      mockTx.job.findFirst.mockResolvedValue(VALID_JOB);
       mockTx.candidate.findFirst.mockResolvedValue(null);
       mockTx.candidate.create.mockResolvedValue({
         id: "candidate-1",
@@ -863,7 +1005,7 @@ describe("ApplicationService.createApplication", () => {
       mockTx.application.create.mockResolvedValue({
         id: "app-1",
         candidateId: "candidate-1",
-        jobId: "job-123",
+        jobId: INTERNAL_JOB_ID,
         status: "APPLIED",
         submittedAt: new Date(),
         source: "CAREERS_SITE",
@@ -874,11 +1016,11 @@ describe("ApplicationService.createApplication", () => {
           lastName: "Doe",
           email: "john@example.com",
         },
-        job: { id: "job-123", title: "Senior Engineer", status: "ACTIVE" },
+        job: { id: INTERNAL_JOB_ID, title: "Senior Engineer", status: "ACTIVE" },
       });
 
       await service.createApplication({
-        jobId: "job-123",
+        jobId: EXTERNAL_JOB_ID,
         firstName: "John",
         lastName: "Doe",
         email: "john@example.com",
@@ -909,6 +1051,7 @@ describe("ApplicationService.createApplication", () => {
       );
       expect(appCreateCall.data.salaryExpectation).toBe(80000);
       expect(appCreateCall.data.noticePeriod).toBe(2);
+      expect(appCreateCall.data.jobId).toBe(INTERNAL_JOB_ID);
       expect(appCreateCall.data.metadata).toEqual({
         certificationAcknowledged: true,
       });
@@ -917,13 +1060,13 @@ describe("ApplicationService.createApplication", () => {
 
   describe("internal error handling", () => {
     it("should convert unexpected errors to INTERNAL_ERROR without exposing details", async () => {
-      mockTx.job.findUnique.mockResolvedValue(VALID_JOB);
+      mockTx.job.findFirst.mockResolvedValue(VALID_JOB);
       mockTx.candidate.findFirst.mockResolvedValue(null);
       mockTx.candidate.create.mockRejectedValue(new Error("DB connection lost"));
 
       const error = await captureError(
         service.createApplication({
-          jobId: "job-123",
+          jobId: EXTERNAL_JOB_ID,
           firstName: "John",
           lastName: "Doe",
           email: "john@example.com",

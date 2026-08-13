@@ -55,8 +55,8 @@ export interface ApplicationData {
 
 export class ApplicationRepository {
   async findJobById(client: Client, jobId: string) {
-    return client.job.findUnique({
-      where: { id: jobId },
+    return client.job.findFirst({
+      where: { externalId: jobId },
       select: { id: true, title: true, status: true },
     });
   }
