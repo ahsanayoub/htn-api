@@ -1,4 +1,14 @@
-# General Coding Preferences
+- Prefers validating Prisma schema with `npx prisma validate` before considering work done. Confidence: 0.85
+- Runs `npx tsc --noEmit` as a fast, no-emit type-checking gate before the full `npm run build`, treating it as a distinct validation step rather than relying solely on the build for type feedback. Confidence: 0.85- When directing complex investigations, provides an explicit numbered question list (e.g., 8–12 point questionnaire) that must each be comprehensively addressed, ensuring multi-angle analysis of the codebase before proceeding to implementation; the agent is expected to answer every numbered item rather than synthesizing them into a general narrative. Confidence: 0.85
+- Runs existing production sync scripts as-is (unmodified) against live systems as a diagnostic experiment before making code changes, observing actual runtime behavior (logs, upserts, stale-job detection) rather than relying solely on static analysis or database queries. Confidence: 0.85
+- When sync scripts exceed foreground timeout limits, executes them in background mode (`run_in_background: true`) and retrieves output via `shell_output` polling rather than abandoning the run. Confidence: 0.8
+- Auto-managed `.commandcode/taste/` files are expected to appear as unstaged modifications; stashes them temporarily during git operat- When a production sync operation fails or produces unexpected counts, stops and reports the result rather than attempting to fix it. Confidence: 0.85
+- Confirms deployment health on the live platform before running data-modifying sync operations, sequencing deploy-verify-then-sync even when both steps have been pre-approved. Confidence: 0.8
+- Expects post-sync reports to include explicit counts for all outcome categories (processed, created, updated, failed, stale detected, stale closed, NULL lastSeenAt) and final field-level distributions (status, lastSeenAt) rather than summary-only reports. Confidence: 0.78
+- Prefers the write/create path to resolve referenced entities using the same identifier/identity the read (GET) path exposes, so a value a client holds from a GET works for the corresponding POST/create (read-write identity-resolution consistency). Confidence: 0.85
+- Prefers API input-validation errors for malformed/invalid input (e.g., a non-UUID identifier) to return 4xx (VALIDATION_ERROR) rather than cascading into an unhandled 500 server error. Confidence: 0.9
+- Prefers unexpected server errors (5xx) to return generic messages without leaking internal details, stack traces, or implementation specifics to the client. Confidence: 0.85
+- Prefers user-friendly, human-readable messages for specific client-facing domain error codes (e.g., JOB_NOT_FOUND → "This position is no longer accepting applications") rather than exposing raw technical errors to end users. Confidence: 0.85# General Coding Preferences
 - When the task is schema-only (e.g., "implement schema.prisma"), restricts output to the Prisma schema file and avoids generating services, repositories, or controllers. Confidence: 0.9
 - For migration/implementation tasks, expects full clean-architecture implementation across prisma client, repositories, services, mappers, and scripts. Confidence: 0.9
 - Avoids explanatory commentary on the code — prefers code output without prose explanations. Confidence: 0.9
@@ -11,6 +21,7 @@
 - Preserves the exact existing API contract and response structure — backward compatibility is non-negotiable during migrations. Confidence: 0.95
 - Prefers incremental, phased migration with explicitly numbered phases (e.g., Phase 1, 2, 3); keeps old code (e.g., Notion importer/service) intact until the new implementation is verified, and does not proceed to the next phase until the user explicitly confirms the verification report. Confidence: 0.9
 - Produces verification reports that enumerate every endpoint tested with explicit pass/fail results as a gating checkpoint before approving progression to the next phase. Confidence: 0.9
+- Final change reports should list exactly which files changed, alongside test/build results — a concise file-level summary rather than an exhaustive narrative. Confidence: 0.8
 - Uses database transactions for multi-step operations that touch multiple models (e.g., upsert organization + job + skills in one transaction). Confidence: 0.85
 - Avoids duplicated logic across layers. Confidence: 0.85
 - Uses `findFirst` + `create` pattern for non-unique upserts, since Prisma's `upsert` requires a unique `where` key. Confidence: 0.85
@@ -20,10 +31,11 @@
 - Uses `as const` for shared Prisma `include` objects. Confidence: 0.8
 - Uses `Promise.all` for parallel independent database queries (e.g., `findMany` + `count` in the same call). Confidence: 0.85
 - Converts Prisma enums to API-compatible strings at the mapper layer (e.g., `JobSource` enum → lowercase string, `WorkplaceType` → Title Case) to preserve frontend API contracts. Confidence: 0.85
-- Investigates root cause systematically (schema config, package versions, import paths) before making changes. Confidence: 0.9
+- Investigates root cause systematically (schema config, package versions, import paths, git branch/deployment state) before making changes. Confidence: 0.9
+- Before implementing API routes, cross-references the frontend's actual request payload expectations (extracted from frontend HTML/JS bundles) against the backend model/schema to verify request-body contract alignment — field names, types, and required fields must match. Confidence: 0.8
 - Produces an exhaustive, cross-layer inventory (every repository, service, controller, and endpoint) before beginning migration work — never skips cataloging a layer or file. Confidence: 0.85
 - Wants migration items explicitly categorized by priority (Critical, Medium, Low) as a checklist before any execution begins. Confidence: 0.9
-- Prefers surgical fixes that preserve existing architecture rather than restructuring. Confidence: 0.9
+- Prefers surgical fixes that preserve existing architecture rather than restructuring; does not modify unrelated files, migration code, or infrastructure. Confidence: 0.9
 - Does not stop until TypeScript compilation (`npm run build`) succeeds — persists through failures iteratively. Confidence: 0.9
 - Masks passwords and any credentials in printed/diagnostic output (e.g., parsed `DATABASE_URL` info) — never logs secrets. Confidence: 0.9
 - Prints pre-operation diagnostic context (database host, database name, SSL status, existing record counts) before data-migration or bulk-write operations to verify the target environment. Confidence: 0.7
@@ -31,13 +43,27 @@
 - Creates dedicated verification scripts that query the database directly through Prisma (counts, groupBy, findFirst with includes, duplicate checks) to verify data integrity after ingestion. Confidence: 0.8
 - When grepping logs for errors, recognizes that search patterns can match false positives in job description content (e.g., "failure" appearing in HTML job descriptions) and distinguishes actual errors from content matches. Confidence: 0.75
 - Before continuing imports or designing sync behavior, runs database-level analysis (Prisma/SQL counts, groupBys, duplicate detection, date ranges) to understand the full inventory state. Confidence: 0.9
-- Non-destructive analysis approach: explicitly avoids deleting or marking jobs closed during the analysis phase; prefers to understand the full picture before making any data modifications. Confidence: 0.9
+- Non-destructive analysis approach: during inspection/diagnostic phases (e.g., initial investigation steps), makes no modifications to any files, code, schema, importer, or API — including not deleting records or marking jobs closed — only queries the database and produces a report; prefers to understand the full picture before making any modifications. Confidence: 0.9
 - Treats the database as a unified system across all sources rather than focusing on a single source in isolation when analyzing job inventory. Confidence: 0.85
 - Prefers reconciliation reports in a "Source | Total | Active | Closed" table format, with sections for duplicate external IDs, jobs without external IDs, and import statistics. Confidence: 0.85
 - Prefers targeted database queries over re-running the full importer during analysis/debugging phases. Confidence: 0.8
 - Designs ingestion pipelines with a source-agnostic adapter pattern — a `SourceAdapter` interface with a `source` property and source-agnostic `SourceSyncService`, so new sources (Greenhouse, Lever, etc.) only require implementing a new adapter. Confidence: 0.9
 - Adds an optional `limit` parameter to batch/sync methods for controlled testing and safe incremental runs. Confidence: 0.85
 - Processes batch ingestion jobs individually (per-job) rather than wrapping the entire batch in a single long-running transaction, to avoid transaction timeouts. Confidence: 0.85
-- Uses a `scratchpad/` directory for temporary investigation/diagnostic scripts, keeping them separate from production `src/scripts/` code. Confidence: 0.9
+- Uses a `scratchpad/` directory for temporary investigation/diagnostic scripts, keeping them separate from production `src/scripts/` code; cleans up scratch files (e.g., `del /q`) after use rather than leaving them behind. Confidence: 0.85
 - Cross-references database state with external API data to identify specific failed records (e.g., fetching the full portal job list and comparing against DB sync status to find which job was seen but not updated). Confidence: 0.8
-- Uses `node` to run `.mjs` standalone scripts and `npx tsx` to run `.ts` scripts, matching the runtime to the file type. Confidence: 0.8
+- Isolates changes on a dedicated feature branch before committing (never commits directly to main); pushes the feature branch with upstream tracking (`git push -u`) and stops before merging to main or deploying, pending explicit confirmation. Confidence: 0.82
+- Uses conventional-commit style commit messages — a short imperative subject line (e.g., "fix: ..."), blank line, then an explanatory body — with a co-author trailer when appropriate. Confidence: 0.82
+- Before committing, runs a verification pass: shows `git status --short`, displays the exact `git diff` of the changed files, and confirms only intended files are staged (no unrelated modifications) — applied as a standard pre-commit gate. Confidence: 0.8
+- Deploys to Railway as the hosting platform, with a push to main triggering the deployment (Railway GitHub integration). Confidence: 0.78
+- After deployment, runs an HTTP smoke-test matrix against the live endpoint covering both success and error paths — GET collection (200), GET by real externalId (200), POST with real externalId (201/success), malformed jobId (400 VALIDATION_ERROR), nonexistent UUID (404 JOB_NOT_FOUND) — and reports the deployed commit hash plus the platform deployment status as the verification gate. Confidence: 0.82
+- Wants pre-implementation diagnostic reports structured into explicitly labeled deliverables (e.g., source-of-truth definition, data distribution, current system behavior, root-cause analysis, categorized solution recommendation) rather than a free-form narrative. Confidence: 0.78
+- Traces individual example records end-to-end through both the write path (external source → ingestion/mapper/repository) and the read path (database → query layer → API → frontend) during diagnostics, to pinpoint exactly which stage drops, misformats, or fails to propagate a record — rather than relying solely on aggregate counts. Confidence: 0.75
+- When diagnosing a data discrepancy, requires field-level provenance tracing across each code layer — for each relevant field, asks for the exact source field name, where it is extracted (parser/extractor), where it is mapped to the canonical model, whether it is persisted in the database, and exactly where the information is lost if it doesn't make it to storage. Prefers this per-field lifecycle view over aggregate-only analysis. Confidence: 0.85
+- Prefers evidence-based conclusions over inference — explicitly instructs "do not infer" from indirect indicators and demands that any claimed relationship be "explicitly proved" by source code or actual data, rather than by pattern correlation (e.g., UTM suffixes, status-value patterns). Confidence: 0.85
+- Runs both `.mjs` and `.ts` scripts with `npx tsx` (leveraging tsx's TypeScript transpilation), rather than using `node` for `.mjs` files. Confidence: 0.8
+- Tests should cover the actual frontend request payload end-to-end, matching real field names and shapes rather than synthetic inputs. Confidence: 0.85
+- Before merging to main or deploying, verifies the working tree contains only intended changes and explicitly acknowledges auto-managed `.commandcode/taste/` files as expected unstaged noise rather than accidental modifications. Confidence: 0.9
+- When smoke-testing production APIs, uses invalid/nonexistent identifiers (e.g., nonexistent job IDs, nil UUIDs) rather than real record IDs to confirm correct error responses (e.g., JOB_NOT_FOUND) without creating side effects. Confidence: 0.85
+- Auto-managed `.commandcode/taste/` files are expected to appear as unstaged modifications; stashes them temporarily during git operations (checkout, merge) that would conflict rather than leaving them dirty. Confidence: 0.8
+ions (checkout, merge) that would conflict rather than leaving them dirty. Confidence: 0.8

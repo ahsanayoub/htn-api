@@ -25,4 +25,5 @@
 - Uses a dedicated per-source sync watermark model (e.g., `SourceSync`) to track sync state across multiple job sources, with fields like `lastSyncAt`, `lastSyncStart`, and import counts. Confidence: 0.9
 - Avoid redundant indexes already covered by a composite primary key. Confidence: 0.75
 - For standalone Node.js scripts (e.g., in `scratchpad/`), uses `@prisma/adapter-pg` with `PrismaPg` and `DATABASE_URL` rather than the app's Prisma client singleton. Confidence: 0.85
+- Prefers wiring up existing unused schema fields over modifying the Prisma schema; only changes the schema when absolutely necessary. Confidence: 0.9
 - For models that can attach to multiple possible parent entities (associative/polymorphic-style linking), prefers optional relations using nullable FKs (`String? @db.Uuid`) and nullable relation fields (`Parent?`), so each can independently reference one, several, or none of them rather than requiring a single mandatory parent. Confidence: 0.8
