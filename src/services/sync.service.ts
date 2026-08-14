@@ -74,6 +74,11 @@ export class SourceSyncService {
     const staleJobs = await this.jobRepository.findStaleJobs(this.adapter.source, syncStart);
     console.log(`[${this.adapter.source}] Stale jobs (not seen in this cycle): ${staleJobs.length}`);
 
+    const staleClosedCount = await this.jobRepository.markStaleJobsAsClosed(this.adapter.source, syncStart);
+    if (staleClosedCount > 0) {
+      console.log(`[${this.adapter.source}] Marked ${staleClosedCount} stale jobs as CLOSED`);
+    }
+
     const result: SyncResult = {
       source: this.adapter.source,
       syncStart,

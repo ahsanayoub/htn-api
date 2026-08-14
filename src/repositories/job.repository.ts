@@ -234,6 +234,18 @@ export class JobRepository {
     });
   }
 
+  async markStaleJobsAsClosed(source: JobSource, since: Date): Promise<number> {
+    const result = await prisma.job.updateMany({
+      where: {
+        source,
+        lastSeenAt: { lt: since },
+        status: { notIn: [JobStatus.CLOSED, JobStatus.ARCHIVED] },
+      },
+      data: { status: JobStatus.CLOSED },
+    });
+    return result.count;
+  }
+
   async addSkills(
     client: PrismaClient,
     jobId: string,
