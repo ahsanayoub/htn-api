@@ -1,6 +1,7 @@
 import "dotenv/config";
 
 import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
+import { JobStatus, JobSource } from "@prisma/client";
 import { ApplicationService } from "../../src/services/applications.service.js";
 import { AppError } from "../../src/errors/app-error.js";
 import prisma from "../../src/prisma/client.js";
@@ -13,6 +14,8 @@ const suite = hasDb ? describe : describe.skip;
 
 let realExternalJobId: string | null = null;
 let realInternalJobId: string | null = null;
+let testOrgId: string | null = null;
+let testJobId: string | null = null;
 
 const createdApplicationIds: string[] = [];
 const createdCandidateIds: string[] = [];
@@ -23,28 +26,54 @@ suite("ApplicationService integration — real PostgreSQL job UUID", () => {
   beforeAll(async () => {
     // Seed a real job UUID exactly the way GET /api/jobs/:jobId exposes it
     // (i.e. the job's externalId, which is a UUID for Micro1-sourced jobs).
+    // Try to find an existing ACTIVE job; if none exist, create a test one.
     const jobs = await prisma.job.findMany({
-      where: { externalId: { not: null } },
+      where: { externalId: { not: null }, status: JobStatus.ACTIVE },
       select: { id: true, externalId: true, status: true },
-      take: 25,
+      take: 250,
     });
 
     const sample = jobs.find(
       (j) => j.externalId && UUID_REGEX.test(j.externalId),
     );
 
-    if (!sample) {
-      throw new Error("No job with a UUID externalId found in the database");
-    }
+    if (sample) {
+      realExternalJobId = sample.externalId!;
+      realInternalJobId = sample.id;
+    } else {
+      // No ACTIVE jobs in DB — create a test ACTIVE job with a UUID externalId.
+      const org = await prisma.organization.create({
+        data: { name: "Test Org for App Integration", type: "COMPANY" },
+      });
+      testOrgId = org.id;
 
-    realExternalJobId = sample.externalId!;
-    realInternalJobId = sample.id;
+      const job = await prisma.job.create({
+        data: {
+          externalId: "11111111-2222-4333-8444-555555555555",
+          source: JobSource.MICRO1,
+          title: "Test Active Job for App Integration",
+          organization: { connect: { id: org.id } },
+          status: JobStatus.ACTIVE,
+        },
+      });
+      testJobId = job.id;
+      realExternalJobId = job.externalId;
+      realInternalJobId = job.id;
+    }
 
     expect(realExternalJobId).toMatch(UUID_REGEX);
   });
 
   afterAll(async () => {
     await cleanupAll();
+    if (testJobId) {
+      await prisma.job.delete({ where: { id: testJobId } }).catch(() => {});
+    }
+    if (testOrgId) {
+      await prisma.organization
+        .delete({ where: { id: testOrgId } })
+        .catch(() => {});
+    }
     await prisma.$disconnect();
   });
 

@@ -1,5 +1,6 @@
 import { JobRepository } from "../repositories/job.repository.js";
 import { mapPrismaJobToApiJob } from "../mappers/job.mapper.js";
+import { JobStatus } from "@prisma/client";
 import type { Job } from "../types/job.js";
 
 const jobRepository = new JobRepository();
@@ -14,6 +15,7 @@ export interface JobFilters {
 
     posted?: number;
     sort?: "newest" | "oldest";
+    status?: JobStatus;
 }
 
 export interface JobSearchResult {
@@ -54,6 +56,7 @@ export async function getJobs(
         source: filters.source,
         page,
         limit,
+        status: filters.status ?? JobStatus.ACTIVE,
     });
 
     const totalPages = Math.ceil(total / limit);
