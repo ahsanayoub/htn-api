@@ -27,6 +27,7 @@ export interface JobQueryParams {
   source?: string;
   page?: number;
   limit?: number;
+  status?: JobStatus;
 }
 
 export interface JobUpsertData {
@@ -108,6 +109,21 @@ function toJobSource(value: string | undefined): JobSource | undefined {
   if (!value) return undefined;
   const normalized = value.toUpperCase().replace(/[-\s]/g, "_");
   return JOB_SOURCE_MAP[normalized];
+}
+
+// Floor a Date to whole-second precision. The stale-detection comparison
+// `lastSeenAt < syncStart` must be immune to the database storing `lastSeenAt`
+// at a coarser precision than the in-memory `syncStart` Date (which carries
+// sub-second milliseconds). If `syncStart` is e.g. 20:27:47.797 and the DB
+// truncates the written `lastSeenAt` to 20:27:47.000, a naive `lastSeenAt <
+// syncStart` is true and every job seen during the current sync is wrongly
+// closed. Flooring the cutoff to seconds guarantees the cutoff never exceeds
+// any `lastSeenAt` written as `syncStart` (the stored value is always >= the
+// floored cutoff for second/ms/microsecond timestamp columns), so a job seen
+// during the current sync can never be classified as stale, regardless of
+// the database's timestamp precision.
+function floorToSeconds(date: Date): Date {
+  return new Date(Math.floor(date.getTime() / 1000) * 1000);
 }
 
 export class JobRepository {
@@ -222,11 +238,12 @@ export class JobRepository {
     source: JobSource,
     since: Date,
   ): Promise<{ id: string; externalId: string | null }[]> {
+    const cutoff = floorToSeconds(since);
     return prisma.job.findMany({
       where: {
         source,
         OR: [
-          { lastSeenAt: { lt: since } },
+          { lastSeenAt: { lt: cutoff } },
           { lastSeenAt: null },
         ],
       },
@@ -235,10 +252,11 @@ export class JobRepository {
   }
 
   async markStaleJobsAsClosed(source: JobSource, since: Date): Promise<number> {
+    const cutoff = floorToSeconds(since);
     const result = await prisma.job.updateMany({
       where: {
         source,
-        lastSeenAt: { lt: since },
+        lastSeenAt: { lt: cutoff },
         status: { notIn: [JobStatus.CLOSED, JobStatus.ARCHIVED] },
       },
       data: { status: JobStatus.CLOSED },
@@ -345,6 +363,10 @@ export class JobRepository {
       cutoff.setHours(0, 0, 0, 0);
       cutoff.setDate(cutoff.getDate() - params.posted);
       where.postedAt = { gte: cutoff };
+    }
+
+    if (params.status) {
+      where.status = { equals: params.status };
     }
 
     return where;

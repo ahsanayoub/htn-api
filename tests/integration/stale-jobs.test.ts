@@ -102,6 +102,36 @@ suite("JobRepository.markStaleJobsAsClosed integration", () => {
     expect(updated?.status).toBe(JobStatus.ACTIVE);
   });
 
+  // Regression for the Step 6B precision bug: syncStart carries sub-second
+  // milliseconds (20:27:47.797) while the database stored lastSeenAt with the
+  // milliseconds truncated to 20:27:47.000. A naive `lastSeenAt < syncStart`
+  // evaluates to TRUE and wrongly closes every job seen during the current
+  // sync. The fix floors the cutoff to whole seconds so the job stays ACTIVE.
+  it("regression: job seen this sync stays ACTIVE when syncStart has ms but lastSeenAt is seconds-truncated", async () => {
+    const syncStart = new Date("2026-08-14T20:27:47.797Z");
+    const secondsTruncatedLastSeen = new Date("2026-08-14T20:27:47.000Z");
+
+    const job = await prisma.job.create({
+      data: {
+        externalId: `test-regression-ms-${Date.now()}`,
+        source: JobSource.MICRO1,
+        title: "Regression ms precision job",
+        organization: { connect: { id: orgId } },
+        status: JobStatus.ACTIVE,
+        lastSeenAt: secondsTruncatedLastSeen,
+      },
+    });
+    createdJobIds.push(job.id);
+
+    const closed = await repo.markStaleJobsAsClosed(JobSource.MICRO1, syncStart);
+
+    const updated = await prisma.job.findUnique({
+      where: { id: job.id },
+      select: { status: true },
+    });
+    expect(updated?.status).toBe(JobStatus.ACTIVE);
+  });
+
   it("does NOT close a job with lastSeenAt IS NULL (legacy import)", async () => {
     const job = await prisma.job.create({
       data: {
