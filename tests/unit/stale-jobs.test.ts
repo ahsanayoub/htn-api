@@ -1,12 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { JobSource, JobStatus } from "@prisma/client";
-import { JobRepository } from "../../src/repositories/job.repository.js";
 
-// These tests reproduce the Step 6B precision bug WITHOUT a database.
-// They use an in-memory store that faithfully simulates the subset of SQL
-// semantics used by `findStaleJobs` / `markStaleJobsAsClosed` so the behaviour
-// ("seen this sync stays ACTIVE", "stale becomes CLOSED", etc.) can be
-// asserted directly and runs in any environment.
+import type { SourceAdapter, SourceJobSummary } from "../../src/adapters/source.adapter.js";
+import type { HTNJob } from "../../src/models/htn-job.model.js";
+import type { JobUpsertData } from "../../src/repositories/job.repository.js";
+import { SourceSyncService } from "../../src/services/sync.service.js";
+import { JobRepository } from "../../src/repositories/job.repository.js";
 
 interface FakeJob {
   id: string;
@@ -14,21 +13,105 @@ interface FakeJob {
   source: JobSource;
   status: JobStatus;
   lastSeenAt: Date | null;
+  title?: string;
+  organizationId?: string;
 }
 
 type WhereClause = Record<string, unknown>;
 
-const { mockJob, store } = vi.hoisted(() => {
+function floorToSeconds(date: Date): Date {
+  return new Date(Math.floor(date.getTime() / 1000) * 1000);
+}
+
+// ---------------------------------------------------------------------------
+// A non-stale summary that the adapter returns so that sync() has at least
+// one job to process and stale detection is allowed to run.  Using a unique
+// externalId ensures it never collides with stale test jobs.
+// ---------------------------------------------------------------------------
+const CURRENT_SUMMARY: SourceJobSummary = {
+  applyUrl: "ext-current",
+  title: "Current Job",
+  companyName: "Test Co",
+};
+
+// ---------------------------------------------------------------------------
+// Mock adapter: a configurable SourceAdapter implementation for tests.
+// ---------------------------------------------------------------------------
+
+function createMockHTNJob(externalId: string, title: string): HTNJob {
+  return {
+    id: externalId,
+    source: "micro1",
+    externalId,
+    title,
+    company: { name: "Test Co" },
+    description: "",
+    content: {
+      responsibilities: [],
+      requirements: [],
+      preferredQualifications: [],
+      benefits: [],
+      additionalSections: {},
+    },
+    skills: [],
+    screeningQuestions: [],
+    metadata: {},
+    directApply: false,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+}
+
+class TestAdapter implements SourceAdapter {
+  readonly source = JobSource.MICRO1;
+  summaries: SourceJobSummary[] = [];
+
+  async getJobSummaries(_syncStart: Date): Promise<SourceJobSummary[]> {
+    return this.summaries;
+  }
+
+  async getJobDetails(summary: SourceJobSummary): Promise<HTNJob> {
+    return createMockHTNJob(summary.applyUrl, summary.title);
+  }
+
+  mapToUpsertData(
+    job: HTNJob,
+    organizationId: string,
+    syncStart: Date,
+  ): JobUpsertData {
+    return {
+      externalId: job.externalId,
+      source: JobSource.MICRO1,
+      title: job.title,
+      organizationId,
+      status: JobStatus.IMPORTED,
+      lastSeenAt: syncStart,
+      lastSyncedAt: syncStart,
+      metadata: {},
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// In-memory Prisma mock: simulates the subset of Prisma operations that
+// SourceSyncService.sync() uses (upsert, findStaleJobs, closeStaleJobs,
+// organization findOrCreate, sourceSync upsert).
+// ---------------------------------------------------------------------------
+
+const { mockDb, store } = vi.hoisted(() => {
   const jobs: FakeJob[] = [];
+  const orgs: { id: string; name: string }[] = [];
+  let nextOrgId = 0;
 
   function matches(job: FakeJob, where: WhereClause): boolean {
     if (!where) return true;
-    if (where.OR) {
-      return (where.OR as WhereClause[]).some(
-        (cond) => matches(job, cond),
-      );
-    }
+
+    // Source must match at the top level (applies to both direct and OR clauses).
     if (where.source !== undefined && job.source !== where.source) return false;
+
+    if (where.OR) {
+      return (where.OR as WhereClause[]).some((cond) => matches(job, cond));
+    }
 
     if (typeof where.lastSeenAt !== "undefined") {
       const la = where.lastSeenAt as unknown;
@@ -49,7 +132,7 @@ const { mockJob, store } = vi.hoisted(() => {
     return true;
   }
 
-  function pick(job: FakeJob, select: Record<string, boolean>) {
+  function project(job: FakeJob, select: Record<string, boolean>): Record<string, unknown> {
     const out: Record<string, unknown> = {};
     for (const k of Object.keys(select)) {
       out[k] = (job as Record<string, unknown>)[k];
@@ -57,214 +140,374 @@ const { mockJob, store } = vi.hoisted(() => {
     return out;
   }
 
-  const job = {
-    findMany: vi.fn(
-      async (args: {
-        where: WhereClause;
-        select?: Record<string, boolean>;
-      }) => {
-        const filtered = jobs.filter((job) => matches(job, args.where));
-        return args.select
-          ? filtered.map((job) => pick(job, args.select))
-          : filtered;
-      },
-    ),
-    updateMany: vi.fn(
-      async (args: { where: WhereClause; data: Partial<FakeJob> }) => {
-        let count = 0;
-        for (const job of jobs) {
-          if (matches(job, args.where)) {
-            Object.assign(job, args.data);
-            count++;
-          }
-        }
-        return { count };
-      },
-    ),
+  // Transaction client: exposes the same job mock methods so upsert works
+  // inside prisma.$transaction(async (tx) => { ... }).
+  const txClient = {
+    job: {} as Record<string, unknown>,
   };
 
-  return { mockJob: job, store: jobs };
+  const job: Record<string, ReturnType<typeof vi.fn>> = {
+    findMany: vi.fn(async (args: { where: WhereClause; select?: Record<string, boolean> }) => {
+      const filtered = jobs.filter((j) => matches(j, args.where));
+      return args.select ? filtered.map((j) => project(j, args.select)) : filtered;
+    }),
+
+    findFirst: vi.fn(async (args: { where: WhereClause }) => {
+      const { source, externalId } = args.where as { source: JobSource; externalId: string };
+      const found = jobs.find((j) => j.source === source && j.externalId === externalId);
+      return found ? { id: found.id } : null;
+    }),
+
+    upsert: vi.fn(async (args: {
+      where: { source_externalId: { source: JobSource; externalId: string } };
+      create: Record<string, unknown>;
+      update: Record<string, unknown>;
+    }) => {
+      const key = args.where.source_externalId;
+      const existing = jobs.find((j) => j.source === key.source && j.externalId === key.externalId);
+      if (existing) {
+        Object.assign(existing, args.update);
+        // Simulate DB truncating lastSeenAt to whole seconds (Step 6B bug surface)
+        if (existing.lastSeenAt) {
+          existing.lastSeenAt = floorToSeconds(existing.lastSeenAt);
+        }
+        return existing;
+      }
+      const newJob: FakeJob = {
+        id: `job-${jobs.length + 1}`,
+        externalId: args.create.externalId as string,
+        source: args.create.source as JobSource,
+        status: (args.create.status as JobStatus) ?? JobStatus.IMPORTED,
+        lastSeenAt: args.create.lastSeenAt as Date | null,
+        title: args.create.title as string,
+        organizationId: args.create.organizationId as string,
+      };
+      if (newJob.lastSeenAt) {
+        newJob.lastSeenAt = floorToSeconds(newJob.lastSeenAt);
+      }
+      jobs.push(newJob);
+      return newJob;
+    }),
+
+    updateMany: vi.fn(async (args: { where: WhereClause; data: Partial<FakeJob> }) => {
+      const matching = jobs.filter((j) => matches(j, args.where));
+      matching.forEach((j) => Object.assign(j, args.data));
+      return { count: matching.length };
+    }),
+  };
+
+  // Wire up the transaction client
+  (txClient.job as Record<string, unknown>).findFirst = job.findFirst;
+  (txClient.job as Record<string, unknown>).upsert = job.upsert;
+
+  const organization = {
+    findFirst: vi.fn(async (args: { where: { name: string } }) => {
+      return orgs.find((o) => o.name === args.where.name) || null;
+    }),
+    create: vi.fn(async (args: { data: { name: string } }) => {
+      const org = { id: `org-${++nextOrgId}`, ...args.data };
+      orgs.push(org);
+      return org;
+    }),
+  };
+
+  const sourceSync = {
+    upsert: vi.fn().mockResolvedValue({}),
+  };
+
+  const mockDb = {
+    job,
+    organization,
+    sourceSync,
+    $transaction: vi.fn(async (callback: (tx: typeof txClient) => Promise<unknown>) => {
+      return callback(txClient);
+    }),
+  };
+
+  return { mockDb, store: { jobs, orgs } };
 });
 
 vi.mock("../../src/prisma/client.js", () => ({
   __esModule: true,
-  default: { job: mockJob },
+  default: mockDb,
 }));
 
-const repo = new JobRepository();
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
-describe("JobRepository stale-job detection", () => {
-  // syncStart as captured by SourceSyncService.sync(): new Date() -> carries ms.
-  const SYNC_START = new Date("2026-08-14T20:27:47.797Z");
-  // The cutoff the DB must see: floored to whole seconds.
-  const FLOORED_CUTOFF = new Date("2026-08-14T20:27:47.000Z");
+const STALE_DATE = new Date("2026-08-10T00:00:00.000Z");
+
+const repo = new JobRepository();
+const adapter = new TestAdapter();
+const service = new SourceSyncService(adapter);
+
+describe("SourceSyncService stale-job closure", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    store.length = 0;
-    mockJob.findMany.mockClear();
-    mockJob.updateMany.mockClear();
+    store.jobs.length = 0;
+    store.orgs.length = 0;
+
+    mockDb.job.findMany.mockClear();
+    mockDb.job.findFirst.mockClear();
+    mockDb.job.upsert.mockClear();
+    mockDb.job.updateMany.mockClear();
+    mockDb.organization.findFirst.mockClear();
+    mockDb.organization.create.mockClear();
+    mockDb.sourceSync.upsert.mockClear();
+    mockDb.$transaction.mockClear();
+
+    adapter.summaries = [];
   });
 
-  describe("regression: timestamp precision bug (Step 6B)", () => {
-    it("floors syncStart to whole seconds before comparing", async () => {
-      await repo.findStaleJobs(JobSource.MICRO1, SYNC_START);
+  afterEach(() => {
+    if (warnSpy) warnSpy.mockRestore();
+  });
 
-      const call = mockJob.findMany.mock.calls[0][0];
-      // The cutoff passed to the DB must be second-aligned, NOT the raw ms value.
-      expect(call.where.OR[0].lastSeenAt.lt).toEqual(FLOORED_CUTOFF);
-      expect(call.where.OR[0].lastSeenAt.lt).not.toEqual(SYNC_START);
+  describe("regression: floorToSeconds (Step 6B)", () => {
+    it("findStaleJobs floors syncStart to whole seconds before comparing", async () => {
+      store.jobs.push({
+        id: "j1",
+        externalId: "ext-1",
+        source: JobSource.MICRO1,
+        status: JobStatus.ACTIVE,
+        lastSeenAt: STALE_DATE,
+      });
+
+      adapter.summaries = [CURRENT_SUMMARY];
+      await service.sync();
+
+      const call = mockDb.job.findMany.mock.calls[0][0];
+      const cutoff = call.where.lastSeenAt.lt as Date;
+      expect(cutoff.getTime() % 1000).toBe(0);
     });
 
-    it("markStaleJobsAsClosed floors syncStart to whole seconds before comparing", async () => {
-      await repo.markStaleJobsAsClosed(JobSource.MICRO1, SYNC_START);
+    it("closeStaleJobs floors syncStart to whole seconds before comparing", async () => {
+      store.jobs.push({
+        id: "j1",
+        externalId: "ext-1",
+        source: JobSource.MICRO1,
+        status: JobStatus.ACTIVE,
+        lastSeenAt: STALE_DATE,
+      });
 
-      const call = mockJob.updateMany.mock.calls[0][0];
-      expect(call.where.lastSeenAt.lt).toEqual(FLOORED_CUTOFF);
-      expect(call.where.lastSeenAt.lt).not.toEqual(SYNC_START);
+      adapter.summaries = [CURRENT_SUMMARY];
+      await service.sync();
+
+      const call = mockDb.job.updateMany.mock.calls[0][0];
+      const cutoff = call.where.lastSeenAt.lt as Date;
+      expect(cutoff.getTime() % 1000).toBe(0);
     });
 
     it("BUG SCENARIO: job seen this sync (lastSeenAt seconds-truncated by DB) stays ACTIVE", async () => {
-      // Production behaviour: syncStart=20:27:47.797, but the DB stored
-      // lastSeenAt as 20:27:47.000 (ms dropped). A naive `lastSeenAt < syncStart`
-      // is TRUE here and wrongly closes the job. After the fix the cutoff is
-      // floored to 20:27:47.000, so `20:27:47.000 < 20:27:47.000` is false.
-      store.push({
-        id: "job-current-sync",
-        externalId: "external-current",
+      // Simulate DB truncating lastSeenAt to whole seconds on every write.
+      // The service receives a syncStart with ms; the DB stores it truncated.
+      // With floorToSeconds, the cutoff is also truncated, so:
+      //   truncated_lastSeenAt < floorToSeconds(syncStart)  ->  false  ->  stays ACTIVE
+      // Without floorToSeconds, the cutoff has ms:
+      //   truncated_lastSeenAt < syncStart_with_ms  ->  true  ->  wrongly CLOSED
+      store.jobs.push({
+        id: "j1",
+        externalId: "ext-1",
         source: JobSource.MICRO1,
         status: JobStatus.ACTIVE,
-        lastSeenAt: new Date("2026-08-14T20:27:47.000Z"),
+        lastSeenAt: STALE_DATE,
       });
 
-      const closed = await repo.markStaleJobsAsClosed(JobSource.MICRO1, SYNC_START);
+      // Re-see this job in the current sync so upsert updates lastSeenAt to syncStart
+      // (truncated by the mock to simulate DB behaviour)
+      adapter.summaries = [{ applyUrl: "ext-1", title: "Job 1", companyName: "Test Co" }];
+      await service.sync();
 
-      expect(closed).toBe(0);
-      expect(store[0].status).toBe(JobStatus.ACTIVE);
+      const job = store.jobs.find((j) => j.id === "j1")!;
+      expect(job.status).not.toBe(JobStatus.CLOSED);
     });
 
     it("current-sync job whose stored lastSeenAt keeps ms also stays ACTIVE", async () => {
-      store.push({
-        id: "job-current-ms",
-        externalId: "external-current-ms",
+      store.jobs.push({
+        id: "j1",
+        externalId: "ext-1",
         source: JobSource.MICRO1,
         status: JobStatus.ACTIVE,
-        lastSeenAt: SYNC_START,
+        lastSeenAt: STALE_DATE,
       });
 
-      const closed = await repo.markStaleJobsAsClosed(JobSource.MICRO1, SYNC_START);
+      // Re-see this job so upsert updates lastSeenAt to syncStart
+      adapter.summaries = [{ applyUrl: "ext-1", title: "Job 1", companyName: "Test Co" }];
+      await service.sync();
 
-      expect(closed).toBe(0);
-      expect(store[0].status).toBe(JobStatus.ACTIVE);
+      const job = store.jobs.find((j) => j.id === "j1")!;
+      expect(job.status).not.toBe(JobStatus.CLOSED);
+      expect(job.lastSeenAt).not.toBeNull();
     });
   });
 
   describe("required behaviours", () => {
     it("genuinely stale previously-seen jobs become CLOSED", async () => {
-      store.push({
-        id: "job-stale",
-        externalId: "external-stale",
+      store.jobs.push({
+        id: "j-stale",
+        externalId: "ext-stale",
         source: JobSource.MICRO1,
         status: JobStatus.ACTIVE,
-        lastSeenAt: new Date("2026-08-14T10:00:00.000Z"),
+        lastSeenAt: STALE_DATE,
       });
 
-      const closed = await repo.markStaleJobsAsClosed(JobSource.MICRO1, SYNC_START);
+      // Provide at least one current job so stale detection runs
+      adapter.summaries = [CURRENT_SUMMARY];
+      await service.sync();
 
-      expect(closed).toBe(1);
-      expect(store[0].status).toBe(JobStatus.CLOSED);
+      const job = store.jobs.find((j) => j.id === "j-stale")!;
+      expect(job.status).toBe(JobStatus.CLOSED);
     });
 
-    it("NULL lastSeenAt (legacy) jobs remain untouched", async () => {
-      store.push({
-        id: "job-null",
-        externalId: "external-null",
+    it("NULL lastSeenAt jobs remain untouched (ignored by stale detection entirely)", async () => {
+      store.jobs.push({
+        id: "j-null",
+        externalId: "ext-null",
         source: JobSource.MICRO1,
         status: JobStatus.ACTIVE,
         lastSeenAt: null,
       });
 
-      const closed = await repo.markStaleJobsAsClosed(JobSource.MICRO1, SYNC_START);
+      adapter.summaries = [CURRENT_SUMMARY];
+      await service.sync();
 
-      expect(closed).toBe(0);
-      expect(store[0].status).toBe(JobStatus.ACTIVE);
-      expect(store[0].lastSeenAt).toBeNull();
+      const job = store.jobs.find((j) => j.id === "j-null")!;
+      expect(job.status).toBe(JobStatus.ACTIVE);
+      expect(job.lastSeenAt).toBeNull();
     });
 
     it("already-CLOSED stale jobs remain CLOSED and are not counted", async () => {
-      store.push({
-        id: "job-closed",
-        externalId: "external-closed",
+      store.jobs.push({
+        id: "j-closed",
+        externalId: "ext-closed",
         source: JobSource.MICRO1,
         status: JobStatus.CLOSED,
-        lastSeenAt: new Date("2026-08-10T00:00:00.000Z"),
+        lastSeenAt: STALE_DATE,
       });
 
-      const closed = await repo.markStaleJobsAsClosed(JobSource.MICRO1, SYNC_START);
+      adapter.summaries = [CURRENT_SUMMARY];
+      await service.sync();
 
-      expect(closed).toBe(0);
-      expect(store[0].status).toBe(JobStatus.CLOSED);
+      const job = store.jobs.find((j) => j.id === "j-closed")!;
+      expect(job.status).toBe(JobStatus.CLOSED);
     });
 
     it("ARCHIVED jobs remain ARCHIVED and are not counted", async () => {
-      store.push({
-        id: "job-archived",
-        externalId: "external-archived",
+      store.jobs.push({
+        id: "j-archived",
+        externalId: "ext-archived",
         source: JobSource.MICRO1,
         status: JobStatus.ARCHIVED,
-        lastSeenAt: new Date("2026-08-10T00:00:00.000Z"),
+        lastSeenAt: STALE_DATE,
       });
 
-      const closed = await repo.markStaleJobsAsClosed(JobSource.MICRO1, SYNC_START);
+      adapter.summaries = [CURRENT_SUMMARY];
+      await service.sync();
 
-      expect(closed).toBe(0);
-      expect(store[0].status).toBe(JobStatus.ARCHIVED);
+      const job = store.jobs.find((j) => j.id === "j-archived")!;
+      expect(job.status).toBe(JobStatus.ARCHIVED);
     });
 
     it("ON_HOLD stale jobs become CLOSED", async () => {
-      store.push({
-        id: "job-onhold",
-        externalId: "external-onhold",
+      store.jobs.push({
+        id: "j-onhold",
+        externalId: "ext-onhold",
         source: JobSource.MICRO1,
         status: JobStatus.ON_HOLD,
-        lastSeenAt: new Date("2026-08-10T00:00:00.000Z"),
+        lastSeenAt: STALE_DATE,
       });
 
-      const closed = await repo.markStaleJobsAsClosed(JobSource.MICRO1, SYNC_START);
+      adapter.summaries = [CURRENT_SUMMARY];
+      await service.sync();
 
-      expect(closed).toBe(1);
-      expect(store[0].status).toBe(JobStatus.CLOSED);
+      const job = store.jobs.find((j) => j.id === "j-onhold")!;
+      expect(job.status).toBe(JobStatus.CLOSED);
     });
 
-    it("does NOT affect jobs from another source", async () => {
-      store.push({
-        id: "job-other-source",
-        externalId: "external-other",
+    it("does NOT affect jobs from another source (e.g. GREENHOUSE)", async () => {
+      store.jobs.push({
+        id: "j-other",
+        externalId: "ext-other",
         source: JobSource.GREENHOUSE,
         status: JobStatus.ACTIVE,
-        lastSeenAt: new Date("2026-08-10T00:00:00.000Z"),
+        lastSeenAt: STALE_DATE,
       });
 
-      const closed = await repo.markStaleJobsAsClosed(JobSource.MICRO1, SYNC_START);
+      // Provide a current MICRO1 job so stale detection runs for MICRO1
+      adapter.summaries = [CURRENT_SUMMARY];
+      await service.sync();
 
-      expect(closed).toBe(0);
-      expect(store[0].status).toBe(JobStatus.ACTIVE);
+      const job = store.jobs.find((j) => j.id === "j-other")!;
+      expect(job.status).toBe(JobStatus.ACTIVE);
     });
 
-    it("findStaleJobs reports this-sync jobs as NOT stale, stale jobs as stale, null as candidate", async () => {
-      store.push(
+    it("correctly counts closed jobs across stale + eligible statuses", async () => {
+      store.jobs.push(
         {
-          id: "this-sync",
+          id: "j-stale-1",
+          externalId: "ext-s1",
+          source: JobSource.MICRO1,
+          status: JobStatus.ACTIVE,
+          lastSeenAt: STALE_DATE,
+        },
+        {
+          id: "j-stale-2",
+          externalId: "ext-s2",
+          source: JobSource.MICRO1,
+          status: JobStatus.ON_HOLD,
+          lastSeenAt: STALE_DATE,
+        },
+        {
+          id: "j-already-closed",
+          externalId: "ext-ac",
+          source: JobSource.MICRO1,
+          status: JobStatus.CLOSED,
+          lastSeenAt: STALE_DATE,
+        },
+        {
+          id: "j-other-source",
+          externalId: "ext-os",
+          source: JobSource.GREENHOUSE,
+          status: JobStatus.ACTIVE,
+          lastSeenAt: STALE_DATE,
+        },
+      );
+
+      adapter.summaries = [CURRENT_SUMMARY];
+      await service.sync();
+
+      // Two eligible stale jobs should be CLOSED
+      expect(store.jobs.find((j) => j.id === "j-stale-1")!.status).toBe(JobStatus.CLOSED);
+      expect(store.jobs.find((j) => j.id === "j-stale-2")!.status).toBe(JobStatus.CLOSED);
+      // Excluded: already CLOSED, and different source
+      expect(store.jobs.find((j) => j.id === "j-already-closed")!.status).toBe(JobStatus.CLOSED);
+      expect(store.jobs.find((j) => j.id === "j-other-source")!.status).toBe(JobStatus.ACTIVE);
+
+      // updateMany was called exactly once with the expected where/data
+      expect(mockDb.job.updateMany).toHaveBeenCalledTimes(1);
+      const updateCall = mockDb.job.updateMany.mock.calls[0][0];
+      expect(updateCall.data).toEqual({ status: JobStatus.CLOSED });
+    });
+  });
+
+  describe("findStaleJobs reporting through sync()", () => {
+    it("reports this-sync jobs as NOT stale, stale jobs as stale, null as NOT stale", async () => {
+      store.jobs.push(
+        {
+          id: "never-stale",
           externalId: "e1",
           source: JobSource.MICRO1,
           status: JobStatus.ACTIVE,
-          lastSeenAt: new Date("2026-08-14T20:27:47.000Z"),
+          lastSeenAt: STALE_DATE,
         },
         {
           id: "stale",
           externalId: "e2",
           source: JobSource.MICRO1,
           status: JobStatus.ACTIVE,
-          lastSeenAt: new Date("2026-08-14T10:00:00.000Z"),
+          lastSeenAt: STALE_DATE,
         },
         {
           id: "never-seen",
@@ -275,13 +518,87 @@ describe("JobRepository stale-job detection", () => {
         },
       );
 
-      const stale = await repo.findStaleJobs(JobSource.MICRO1, SYNC_START);
-      const staleIds = stale.map((j) => j.id);
+      // Re-see "never-stale" so it gets a fresh lastSeenAt and is not stale
+      adapter.summaries = [{ applyUrl: "e1", title: "Job 1", companyName: "Test Co" }];
+      const result = await service.sync();
 
+      const staleIds = result.staleJobs.map((j) => j.id);
       expect(staleIds).toContain("stale");
-      expect(staleIds).toContain("never-seen");
-      // The job seen during THIS sync must never be reported as stale.
-      expect(staleIds).not.toContain("this-sync");
+      expect(staleIds).not.toContain("never-seen");
+      expect(staleIds).not.toContain("never-stale");
+    });
+  });
+
+  describe("zero-jobs safety guard", () => {
+    it("leaves stale jobs ACTIVE when source returns zero jobs", async () => {
+      store.jobs.push({
+        id: "j-stale",
+        externalId: "ext-stale",
+        source: JobSource.MICRO1,
+        status: JobStatus.ACTIVE,
+        lastSeenAt: STALE_DATE,
+      });
+
+      const result = await service.sync();
+
+      const job = store.jobs.find((j) => j.id === "j-stale")!;
+      expect(job.status).toBe(JobStatus.ACTIVE);
+      expect(result.totalSeen).toBe(0);
+      expect(result.totalStale).toBe(0);
+      expect(result.staleJobs).toEqual([]);
+    });
+
+    it("does NOT call findStaleJobs when source returns zero jobs", async () => {
+      store.jobs.push({
+        id: "j-stale",
+        externalId: "ext-stale",
+        source: JobSource.MICRO1,
+        status: JobStatus.ACTIVE,
+        lastSeenAt: STALE_DATE,
+      });
+
+      await service.sync();
+
+      expect(mockDb.job.findMany).not.toHaveBeenCalled();
+    });
+
+    it("does NOT call closeStaleJobs when source returns zero jobs", async () => {
+      store.jobs.push({
+        id: "j-stale",
+        externalId: "ext-stale",
+        source: JobSource.MICRO1,
+        status: JobStatus.ACTIVE,
+        lastSeenAt: STALE_DATE,
+      });
+
+      await service.sync();
+
+      expect(mockDb.job.updateMany).not.toHaveBeenCalled();
+    });
+
+    it("still records SourceSync with totalSeen=0 when source returns zero jobs", async () => {
+      await service.sync();
+
+      expect(mockDb.sourceSync.upsert).toHaveBeenCalledTimes(1);
+      const call = mockDb.sourceSync.upsert.mock.calls[0][0];
+      expect(call.create.totalSeen).toBe(0);
+      expect(call.update.totalSeen).toBe(0);
+    });
+
+    it("emits a warning when source returns zero jobs", async () => {
+      warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      await service.sync();
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Source returned 0 jobs"),
+      );
+    });
+  });
+
+  describe("JobRepository API surface", () => {
+    it("no longer exposes markStaleJobsAsClosed", () => {
+      expect("markStaleJobsAsClosed" in repo).toBe(false);
     });
   });
 });

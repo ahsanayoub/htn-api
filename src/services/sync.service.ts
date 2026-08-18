@@ -1,4 +1,4 @@
-import { JobSource, type SourceSync } from "@prisma/client";
+import { JobSource, JobStatus, type SourceSync } from "@prisma/client";
 import prisma from "../prisma/client.js";
 import { JobRepository } from "../repositories/job.repository.js";
 import { OrganizationRepository } from "../repositories/organization.repository.js";
@@ -14,6 +14,10 @@ export interface SyncResult {
   totalFailed: number;
   totalStale: number;
   staleJobs: { id: string; externalId: string | null }[];
+}
+
+function floorToSeconds(date: Date): Date {
+  return new Date(Math.floor(date.getTime() / 1000) * 1000);
 }
 
 export class SourceSyncService {
@@ -71,12 +75,20 @@ export class SourceSyncService {
 
     await this.upsertSourceSyncRecord(syncStart, syncEnd, toProcess.length, created, updated, failed);
 
-    const staleJobs = await this.jobRepository.findStaleJobs(this.adapter.source, syncStart);
-    console.log(`[${this.adapter.source}] Stale jobs (not seen in this cycle): ${staleJobs.length}`);
+    let staleJobs: { id: string; externalId: string | null }[] = [];
 
-    const staleClosedCount = await this.jobRepository.markStaleJobsAsClosed(this.adapter.source, syncStart);
-    if (staleClosedCount > 0) {
-      console.log(`[${this.adapter.source}] Marked ${staleClosedCount} stale jobs as CLOSED`);
+    if (toProcess.length === 0) {
+      console.warn(
+        `[${this.adapter.source}] Source returned 0 jobs — skipping stale-closure to avoid data loss`,
+      );
+    } else {
+      staleJobs = await this.jobRepository.findStaleJobs(this.adapter.source, syncStart);
+      console.log(`[${this.adapter.source}] Stale jobs (not seen in this cycle): ${staleJobs.length}`);
+
+      const staleClosedCount = await this.closeStaleJobs(this.adapter.source, syncStart);
+      if (staleClosedCount > 0) {
+        console.log(`[${this.adapter.source}] Marked ${staleClosedCount} stale jobs as CLOSED`);
+      }
     }
 
     const result: SyncResult = {
@@ -94,6 +106,26 @@ export class SourceSyncService {
     console.log(`[${this.adapter.source}] Sync complete: ${created} created, ${updated} updated, ${failed} failed, ${staleJobs.length} stale`);
 
     return result;
+  }
+
+  private async closeStaleJobs(
+    source: JobSource,
+    since: Date,
+  ): Promise<number> {
+    const cutoff = floorToSeconds(since);
+    const result = await prisma.job.updateMany({
+      where: {
+        source,
+        lastSeenAt: { lt: cutoff },
+        status: {
+          notIn: [JobStatus.CLOSED, JobStatus.ARCHIVED],
+        },
+      },
+      data: {
+        status: JobStatus.CLOSED,
+      },
+    });
+    return result.count;
   }
 
   private async upsertSourceSyncRecord(

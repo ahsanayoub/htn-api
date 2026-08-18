@@ -242,26 +242,10 @@ export class JobRepository {
     return prisma.job.findMany({
       where: {
         source,
-        OR: [
-          { lastSeenAt: { lt: cutoff } },
-          { lastSeenAt: null },
-        ],
+        lastSeenAt: { lt: cutoff },
       },
       select: { id: true, externalId: true },
     });
-  }
-
-  async markStaleJobsAsClosed(source: JobSource, since: Date): Promise<number> {
-    const cutoff = floorToSeconds(since);
-    const result = await prisma.job.updateMany({
-      where: {
-        source,
-        lastSeenAt: { lt: cutoff },
-        status: { notIn: [JobStatus.CLOSED, JobStatus.ARCHIVED] },
-      },
-      data: { status: JobStatus.CLOSED },
-    });
-    return result.count;
   }
 
   async addSkills(
