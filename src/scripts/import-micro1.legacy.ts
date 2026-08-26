@@ -1,3 +1,8 @@
+// LEGACY ONLY — DO NOT RUN AGAINST A POPULATED DATABASE.
+// This importer does not participate in SourceSync lifecycle tracking,
+// does not update lastSeenAt, and can reactivate CLOSED jobs.
+// The only authoritative Micro1 ingestion path is sync-micro1.ts.
+
 import {
     micro1Client,
     micro1Processor,

@@ -1,3 +1,6 @@
+// AUTHORITATIVE MICRO1 INGESTION PATH.
+// All normal Micro1 ingestion must go through SourceSyncService.sync().
+
 import "dotenv/config";
 import { Micro1Client } from "../clients/micro1.client.js";
 import { Micro1Parser } from "../parsers/micro1.parser.js";

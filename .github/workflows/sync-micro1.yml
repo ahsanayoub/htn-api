@@ -1,0 +1,61 @@
+name: sync-micro1
+
+on:
+  schedule:
+    # Every 6 hours, at minute 0 of the 6-hour mark.
+    # The Micro1 portal changes on a human-recruiter cadence; 6h is well within
+    # the acceptable staleness window. Overlap protection is enforced two ways:
+    # (1) Postgres advisory lock acquired by SourceSyncService.sync(), and
+    # (2) the GH Actions `concurrency:` group below.
+    - cron: "0 */6 * * *"
+
+  # Manual trigger for incident response / one-off re-syncs.
+  # Disabled by default in production-like repos; enable via the Actions UI if needed.
+  workflow_dispatch:
+
+concurrency:
+  # Single-flight at the workflow level: any in-progress sync-micro1 run prevents
+  # a new one from starting. The Postgres advisory lock inside sync.service.ts
+  # is the primary guard; this is defense in depth.
+  group: sync-micro1
+  cancel-in-progress: false
+
+jobs:
+  sync-micro1:
+    name: Run authoritative Micro1 ingestion sync
+    runs-on: ubuntu-latest
+
+    # Hard cap so a hung sync does not run indefinitely.
+    # Micro1 portal has 18 jobs/page, ~hundreds of pages; in practice the sync
+    # completes in under 10 minutes. 15 minutes gives ample headroom.
+    timeout-minutes: 15
+
+    env:
+      # DATABASE_URL is the only env var strictly required by sync-micro1.ts.
+      # sync-micro1.ts -> prisma/client.ts:12 reads DATABASE_URL to connect to Postgres.
+      # The Micro1 portal endpoint (https://prod-api.micro1.ai) is publicly
+      # accessible without authentication per src/clients/micro1.client.ts:10-15.
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install dependencies
+        # `npm ci` installs both dependencies and devDependencies.
+        # `tsx` is required to run `npm run sync:micro1` (devDependency, package.json:41).
+        run: npm ci
+
+      - name: Run authoritative Micro1 sync
+        # This is the ONLY ingestion command. It must never be replaced with
+        # `import-micro1.legacy.ts` or any other legacy path.
+        # `npm run sync:micro1` -> `tsx src/scripts/sync-micro1.ts`
+        #   -> SourceSyncService.sync() via Micro1SyncAdapter
+        #   -> acquires pg_try_advisory_xact_lock per source
+        #   -> exits 0 on success, 1 on failure (sync-micro1.ts:49, 54)
+        run: npm run sync:micro1

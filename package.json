@@ -14,7 +14,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "import:micro1": "tsx src/scripts/import-micro1.ts"
+    "sync:micro1": "tsx src/scripts/sync-micro1.ts"
   },
   "keywords": [],
   "author": "",
