@@ -17,7 +17,7 @@ concurrency:
   # Single-flight at the workflow level: any in-progress sync-micro1 run prevents
   # a new one from starting. The Postgres advisory lock inside sync.service.ts
   # is the primary guard; this is defense in depth.
-  group: sync-micro1
+  group: sync-micro1-v2
   cancel-in-progress: false
 
 jobs:
