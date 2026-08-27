@@ -1,4 +1,4 @@
-import { Prisma, OrganizationType, ApplicationStatus, ApplicationSource } from "@prisma/client";
+import { Prisma, OrganizationType, ApplicationStatus, ApplicationSource, DocumentType } from "@prisma/client";
 
 const APPLICATION_INCLUDES = {
   candidate: {
@@ -53,6 +53,15 @@ export interface ApplicationData {
   metadata?: Prisma.InputJsonValue;
 }
 
+export interface ResumeDocumentData {
+  candidateId: string;
+  storageKey: string;
+  fileName: string;
+  mimeType: string;
+  size: number;
+  checksum?: string | null;
+}
+
 export class ApplicationRepository {
   async findJobById(client: Client, jobId: string) {
     return client.job.findFirst({
@@ -101,46 +110,19 @@ export class ApplicationRepository {
         email: candidateFields.email,
       };
 
-      if (candidateFields.phone && candidateFields.phone.trim()) {
-        updateData.phone = candidateFields.phone.trim();
-      }
-      if (candidateFields.linkedinUrl && candidateFields.linkedinUrl.trim()) {
-        updateData.linkedinUrl = candidateFields.linkedinUrl.trim();
-      }
-      if (candidateFields.portfolioUrl && candidateFields.portfolioUrl.trim()) {
-        updateData.portfolioUrl = candidateFields.portfolioUrl.trim();
-      }
-      if (candidateFields.githubUrl && candidateFields.githubUrl.trim()) {
-        updateData.githubUrl = candidateFields.githubUrl.trim();
-      }
+      if (candidateFields.phone && candidateFields.phone.trim()) updateData.phone = candidateFields.phone.trim();
+      if (candidateFields.linkedinUrl && candidateFields.linkedinUrl.trim()) updateData.linkedinUrl = candidateFields.linkedinUrl.trim();
+      if (candidateFields.portfolioUrl && candidateFields.portfolioUrl.trim()) updateData.portfolioUrl = candidateFields.portfolioUrl.trim();
+      if (candidateFields.githubUrl && candidateFields.githubUrl.trim()) updateData.githubUrl = candidateFields.githubUrl.trim();
       if (candidateFields.location && candidateFields.location.trim()) {
         updateData.location = candidateFields.location.trim();
         updateData.city = candidateFields.location.trim();
       }
-      if (candidateFields.currentTitle && candidateFields.currentTitle.trim()) {
-        updateData.currentTitle = candidateFields.currentTitle.trim();
-      }
-      if (
-        candidateFields.yearsExperience !== undefined &&
-        candidateFields.yearsExperience !== null
-      ) {
-        updateData.yearsExperience = candidateFields.yearsExperience;
-      }
-      if (
-        candidateFields.desiredSalary !== undefined &&
-        candidateFields.desiredSalary !== null
-      ) {
-        updateData.desiredSalary = candidateFields.desiredSalary;
-      }
-      if (
-        candidateFields.noticePeriod !== undefined &&
-        candidateFields.noticePeriod !== null
-      ) {
-        updateData.noticePeriod = candidateFields.noticePeriod;
-      }
-      if (currentOrganizationId) {
-        updateData.currentOrganizationId = currentOrganizationId;
-      }
+      if (candidateFields.currentTitle && candidateFields.currentTitle.trim()) updateData.currentTitle = candidateFields.currentTitle.trim();
+      if (candidateFields.yearsExperience !== undefined && candidateFields.yearsExperience !== null) updateData.yearsExperience = candidateFields.yearsExperience;
+      if (candidateFields.desiredSalary !== undefined && candidateFields.desiredSalary !== null) updateData.desiredSalary = candidateFields.desiredSalary;
+      if (candidateFields.noticePeriod !== undefined && candidateFields.noticePeriod !== null) updateData.noticePeriod = candidateFields.noticePeriod;
+      if (currentOrganizationId) updateData.currentOrganizationId = currentOrganizationId;
 
       return client.candidate.update({
         where: { id: existingCandidateId },
@@ -178,24 +160,33 @@ export class ApplicationRepository {
     });
   }
 
-  private async findOrCreateOrganization(
-    client: Client,
-    name: string,
-  ): Promise<string> {
+  async createResumeDocument(client: Client, data: ResumeDocumentData) {
+    return client.document.create({
+      data: {
+        candidateId: data.candidateId,
+        type: DocumentType.RESUME,
+        storageProvider: "CLOUDFLARE_R2",
+        storageKey: data.storageKey,
+        fileName: data.fileName,
+        mimeType: data.mimeType,
+        size: data.size,
+        checksum: data.checksum,
+        version: 1,
+        isLatest: true,
+      },
+    });
+  }
+
+  private async findOrCreateOrganization(client: Client, name: string): Promise<string> {
     const existing = await client.organization.findFirst({
       where: { name: { equals: name, mode: "insensitive" } },
       select: { id: true },
     });
 
-    if (existing) {
-      return existing.id;
-    }
+    if (existing) return existing.id;
 
     const created = await client.organization.create({
-      data: {
-        name,
-        type: OrganizationType.COMPANY,
-      },
+      data: { name, type: OrganizationType.COMPANY },
       select: { id: true },
     });
 
