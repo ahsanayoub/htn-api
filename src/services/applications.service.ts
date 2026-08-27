@@ -24,13 +24,7 @@ export interface CreateApplicationInput {
   location?: string;
   certificationAcknowledged?: boolean;
   coverLetter?: string;
-  resume?: {
-    uploadId: string;
-    storageKey: string;
-    fileName: string;
-    mimeType: string;
-    size: number;
-  };
+  resume?: { uploadId: string; storageKey: string; fileName: string; mimeType: string; size: number };
 }
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -48,7 +42,12 @@ function sanitizeNumber(value: unknown): number | undefined {
 
 export class ApplicationService {
   private readonly repository = new ApplicationRepository();
-  private readonly storage = new R2StorageService();
+  private storage: R2StorageService | undefined;
+
+  private getStorage(): R2StorageService {
+    this.storage ??= new R2StorageService();
+    return this.storage;
+  }
 
   async createApplication(input: unknown): Promise<ApplicationWithRelations> {
     const validated = this.validateInput(input);
@@ -57,21 +56,19 @@ export class ApplicationService {
     try {
       const application = await prisma.$transaction(async (tx) => {
         const job = await this.repository.findJobById(tx, validated.jobId);
-
         if (!job) throw new AppError("JOB_NOT_FOUND", "Job not found", 404);
         if (job.status === JobStatus.CLOSED || job.status === JobStatus.ARCHIVED) {
           throw new AppError("JOB_CLOSED", "Cannot apply to a closed or archived job", 409);
         }
 
         const existingCandidate = await this.repository.findCandidateByEmail(tx, email);
-
         if (existingCandidate) {
           const existingApp = await this.repository.findApplicationByCandidateAndJob(tx, existingCandidate.id, job.id);
           if (existingApp) throw new AppError("ALREADY_APPLIED", "You have already applied to this role.", 409);
         }
 
         if (validated.resume) {
-          await this.storage.verifyUploadedResume(
+          await this.getStorage().verifyUploadedResume(
             validated.resume.uploadId,
             validated.resume.storageKey,
             validated.resume.mimeType,
@@ -79,25 +76,21 @@ export class ApplicationService {
           );
         }
 
-        const candidate = await this.repository.upsertCandidate(
-          tx,
-          {
-            email,
-            firstName: validated.firstName.trim(),
-            lastName: validated.lastName.trim(),
-            phone: validated.phone,
-            location: validated.location,
-            linkedinUrl: validated.linkedinUrl,
-            portfolioUrl: validated.portfolioUrl,
-            githubUrl: validated.githubUrl,
-            currentCompany: validated.currentCompany,
-            currentTitle: validated.currentTitle,
-            yearsExperience: validated.yearsExperience,
-            desiredSalary: validated.desiredSalary,
-            noticePeriod: validated.noticePeriod,
-          },
-          existingCandidate?.id,
-        );
+        const candidate = await this.repository.upsertCandidate(tx, {
+          email,
+          firstName: validated.firstName.trim(),
+          lastName: validated.lastName.trim(),
+          phone: validated.phone,
+          location: validated.location,
+          linkedinUrl: validated.linkedinUrl,
+          portfolioUrl: validated.portfolioUrl,
+          githubUrl: validated.githubUrl,
+          currentCompany: validated.currentCompany,
+          currentTitle: validated.currentTitle,
+          yearsExperience: validated.yearsExperience,
+          desiredSalary: validated.desiredSalary,
+          noticePeriod: validated.noticePeriod,
+        }, existingCandidate?.id);
 
         const metadata: Record<string, unknown> = {};
         if (validated.certifications) metadata.certifications = validated.certifications;
@@ -132,49 +125,38 @@ export class ApplicationService {
       return application;
     } catch (error) {
       if (error instanceof AppError) throw error;
-
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
         throw new AppError("ALREADY_APPLIED", "You have already applied to this role.", 409);
       }
-
       console.error("Application creation failed:", error instanceof Error ? error.message : String(error));
       throw new AppError("INTERNAL_ERROR", "Internal server error", 500);
     }
   }
 
   private validateInput(input: unknown): CreateApplicationInput {
-    if (typeof input !== "object" || input === null) {
-      throw new AppError("VALIDATION_ERROR", "Invalid request body", 400);
-    }
-
+    if (typeof input !== "object" || input === null) throw new AppError("VALIDATION_ERROR", "Invalid request body", 400);
     const body = input as Record<string, unknown>;
     const requiredFields = ["jobId", "firstName", "lastName", "email"];
     const missing = requiredFields.filter((field) => typeof body[field] !== "string" || !(body[field] as string).trim());
-
     if (missing.length > 0) throw new AppError("VALIDATION_ERROR", `Missing required fields: ${missing.join(", ")}`, 400);
 
     const jobId = (body.jobId as string).trim();
     if (!UUID_REGEX.test(jobId)) throw new AppError("VALIDATION_ERROR", "Invalid jobId: must be a valid UUID", 400);
-
     const email = (body.email as string).trim().toLowerCase();
     if (!EMAIL_REGEX.test(email)) throw new AppError("VALIDATION_ERROR", "Invalid email address", 400);
 
     let resume: CreateApplicationInput["resume"];
     if (body.resume !== undefined) {
-      if (typeof body.resume !== "object" || body.resume === null) {
-        throw new AppError("VALIDATION_ERROR", "Invalid resume payload", 400);
-      }
+      if (typeof body.resume !== "object" || body.resume === null) throw new AppError("VALIDATION_ERROR", "Invalid resume payload", 400);
       const value = body.resume as Record<string, unknown>;
       const uploadId = sanitizeString(value.uploadId);
       const storageKey = sanitizeString(value.storageKey);
       const fileName = sanitizeString(value.fileName);
       const mimeType = sanitizeString(value.mimeType);
       const size = sanitizeNumber(value.size);
-
-      if (!uploadId || !storageKey || !fileName || !mimeType || !size) {
+      if (!uploadId || !storageKey || !fileName || !mimeType || size === undefined) {
         throw new AppError("VALIDATION_ERROR", "resume.uploadId, storageKey, fileName, mimeType, and size are required", 400);
       }
-
       if (!UUID_REGEX.test(uploadId)) throw new AppError("VALIDATION_ERROR", "Invalid resume uploadId", 400);
       resume = { uploadId, storageKey, fileName, mimeType, size };
     }
