@@ -151,6 +151,10 @@ model Candidate {
   noticePeriod          Int?
   summary               String?
   metadata              Json?
+  inTalentPool          Boolean          @default(false)
+  contactConsent        Boolean          @default(false)
+  contactConsentAt      DateTime?
+  consentSource         String?
   currentOrganizationId String?          @db.Uuid
   createdAt             DateTime         @default(now())
   updatedAt             DateTime         @updatedAt
@@ -162,6 +166,8 @@ model Candidate {
   @@index([email])
   @@index([lastName])
   @@index([currentOrganizationId])
+  @@index([inTalentPool])
+  @@index([contactConsent])
 }
 
 model Application {

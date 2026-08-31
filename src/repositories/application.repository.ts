@@ -177,6 +177,32 @@ export class ApplicationRepository {
     });
   }
 
+  async setTalentPoolConsent(
+    client: Client,
+    candidateId: string,
+    data: {
+      contactConsentAt: Date;
+      consentSource: string;
+      metadata?: Record<string, unknown> | null;
+    },
+  ) {
+    const updateData: Record<string, unknown> = {
+      inTalentPool: true,
+      contactConsent: true,
+      contactConsentAt: data.contactConsentAt,
+      consentSource: data.consentSource,
+    };
+
+    if (data.metadata) {
+      updateData.metadata = data.metadata as Prisma.InputJsonValue;
+    }
+
+    return client.candidate.update({
+      where: { id: candidateId },
+      data: updateData,
+    });
+  }
+
   private async findOrCreateOrganization(client: Client, name: string): Promise<string> {
     const existing = await client.organization.findFirst({
       where: { name: { equals: name, mode: "insensitive" } },

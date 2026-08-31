@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import path from "node:path";
 import { S3Client, HeadObjectCommand } from "@aws-sdk/client-s3";
+import { AppError } from "../errors/app-error.js";
 
 const MAX_RESUME_SIZE = 10 * 1024 * 1024;
 const DEFAULT_EXPIRES_IN = 15 * 60;
@@ -200,7 +201,11 @@ export class R2StorageService {
     expectedSize: number,
   ): Promise<ResumeObjectMetadata> {
     if (!this.isValidResumeKey(uploadId, storageKey)) {
-      throw new Error("Invalid resume storage key.");
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "Invalid resume storage key.",
+        400,
+      );
     }
 
     let response;
@@ -213,14 +218,30 @@ export class R2StorageService {
         }),
       );
     } catch (error) {
+      const awsError = error as {
+        name?: string;
+        $metadata?: { httpStatusCode?: number };
+      };
+
+      const isNotFound =
+        awsError.name === "NotFound" ||
+        awsError.name === "NoSuchKey" ||
+        awsError.$metadata?.httpStatusCode === 404;
+
+      if (isNotFound) {
+        throw new AppError(
+          "VALIDATION_ERROR",
+          "Resume upload was not found in storage. Upload the resume before submitting the application.",
+          400,
+        );
+      }
+
       console.error(
         "R2 HeadObject failed:",
         error instanceof Error ? error.message : String(error),
       );
 
-      throw new Error(
-        "Resume upload was not found in storage. Upload the resume before submitting the application.",
-      );
+      throw error;
     }
 
     const size = Number(response.ContentLength ?? 0);
@@ -237,12 +258,18 @@ export class R2StorageService {
       size <= 0 ||
       size > MAX_RESUME_SIZE
     ) {
-      throw new Error("Stored resume has an invalid size.");
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "Stored resume has an invalid size.",
+        400,
+      );
     }
 
     if (size !== expectedSize) {
-      throw new Error(
+      throw new AppError(
+        "VALIDATION_ERROR",
         "Resume size does not match the uploaded file.",
+        400,
       );
     }
 
@@ -250,8 +277,10 @@ export class R2StorageService {
       mimeType &&
       mimeType !== expectedMimeType.toLowerCase()
     ) {
-      throw new Error(
+      throw new AppError(
+        "VALIDATION_ERROR",
         "Resume content type does not match the uploaded file.",
+        400,
       );
     }
 

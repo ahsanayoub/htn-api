@@ -4,6 +4,7 @@ import cors from "cors";
 import jobsRouter from "./routes/jobs.js";
 import applicationsRouter from "./routes/applications.js";
 import resumesRouter from "./routes/resumes.js";
+import candidatesRouter from "./routes/candidates.js";
 
 const app = express();
 
@@ -18,5 +19,6 @@ app.use(
 app.use("/api/jobs", jobsRouter);
 app.use("/api/applications", applicationsRouter);
 app.use("/api/resumes", resumesRouter);
+app.use("/api/candidates", candidatesRouter);
 
 export default app;
