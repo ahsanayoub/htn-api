@@ -10,6 +10,7 @@ import authRouter from "./routes/auth.js";
 import recruiterRouter from "./routes/recruiter.js";
 import recruiterSubmissionsRouter from "./routes/recruiter-submissions.js";
 import atsIntegrationRouter from "./routes/integrations-ats.js";
+import atsRecruiterIntegrationRouter from "./routes/integrations-ats-recruiters.js";
 import { prepareRecruiterAuth } from "./middleware/recruiter-auth.js";
 import { AppError } from "./errors/app-error.js";
 
@@ -47,6 +48,7 @@ app.use("/auth", authRouter);
 app.use("/recruiter", recruiterRouter);
 app.use("/recruiter/submissions", recruiterSubmissionsRouter);
 app.use("/integrations/ats", atsIntegrationRouter);
+app.use("/integrations/ats", atsRecruiterIntegrationRouter);
 
 app.use("/api/jobs", jobsRouter);
 app.use("/api/applications", applicationsRouter);
