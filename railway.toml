@@ -1,0 +1,5 @@
+# Apply additive Prisma migrations once per deployment, before the new
+# replica starts serving traffic. Do not use migrate dev, db push, or reset.
+# Railway pre-deploy runs once per deployment, not on every application process.
+[deploy]
+preDeployCommand = ["npm run db:migrate:deploy"]

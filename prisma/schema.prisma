@@ -191,6 +191,7 @@ model Application {
   updatedAt         DateTime           @updatedAt
   candidate         Candidate          @relation(fields: [candidateId], references: [id])
   job               Job                @relation(fields: [jobId], references: [id])
+  atsSync           HtnAtsSubmissionSync?
 
   @@unique([candidateId, jobId])
   @@index([candidateId])
@@ -377,6 +378,37 @@ enum ApplicationSource {
   IMPORT
   LINKEDIN
   OTHER
+}
+
+enum HtnAtsSyncStatus {
+  PENDING
+  SYNCING
+  SYNCED
+  FAILED
+}
+
+/// Durable HTN → ATS synchronization record for a recruiter submission.
+/// Authoritative sync state lives here, not in Application.metadata.
+model HtnAtsSubmissionSync {
+  id                      String           @id @default(uuid()) @db.Uuid
+  applicationId           String           @unique @db.Uuid
+  application             Application      @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  status                  HtnAtsSyncStatus @default(PENDING)
+  attemptCount            Int              @default(0)
+  lastAttemptAt           DateTime?
+  nextRetryAt             DateTime?
+  lastError               String?
+  lastErrorCode           String?
+  recruiterId             String?
+  recruiterOrganizationId String?
+  atsCandidateId          String?
+  atsApplicationId        String?
+  atsJobId                String?
+  syncedAt                DateTime?
+  createdAt               DateTime         @default(now())
+  updatedAt               DateTime         @updatedAt
+
+  @@index([status, nextRetryAt])
 }
 
 enum SearchProvider {
