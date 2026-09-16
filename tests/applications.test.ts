@@ -7,8 +7,9 @@ const { mockTx, mockTransaction } = vi.hoisted(() => {
   const mockTx = {
     job: { findFirst: vi.fn() },
     candidate: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn() },
-    application: { findFirst: vi.fn(), create: vi.fn() },
+    application: { findFirst: vi.fn(), create: vi.fn(), findUnique: vi.fn() },
     organization: { findFirst: vi.fn(), create: vi.fn() },
+    htnAtsSubmissionSync: { upsert: vi.fn() },
   };
   const mockTransaction = vi.fn(async (fn: any) => fn(mockTx));
   return { mockTx, mockTransaction };
@@ -43,8 +44,11 @@ describe("ApplicationService.createApplication", () => {
     mockTx.candidate.update.mockReset();
     mockTx.application.findFirst.mockReset();
     mockTx.application.create.mockReset();
+    mockTx.application.findUnique.mockReset();
     mockTx.organization.findFirst.mockReset();
     mockTx.organization.create.mockReset();
+    mockTx.htnAtsSubmissionSync.upsert.mockReset();
+    mockTx.htnAtsSubmissionSync.upsert.mockResolvedValue({ status: "PENDING" });
   });
 
   describe("regression: resolves job by externalId (matches GET /api/jobs/:jobId)", () => {
@@ -1076,6 +1080,98 @@ describe("ApplicationService.createApplication", () => {
       expect(error).toBeInstanceOf(AppError);
       expect(error.code).toBe("INTERNAL_ERROR");
       expect(error.message).toBe("Internal server error");
+    });
+  });
+
+  describe("recruiter submissions", () => {
+    it("stores source = RECRUITER and creates durable ATS sync state", async () => {
+      mockTx.job.findFirst.mockResolvedValue(VALID_JOB);
+      mockTx.candidate.findFirst.mockResolvedValue(null);
+      mockTx.candidate.create.mockResolvedValue({
+        id: "candidate-1",
+        email: "recruiter.candidate@example.com",
+      });
+      mockTx.application.create.mockResolvedValue({
+        id: "app-recruiter-1",
+        candidateId: "candidate-1",
+        jobId: INTERNAL_JOB_ID,
+        status: "APPLIED",
+        source: "RECRUITER",
+      });
+
+      await service.createApplication({
+        jobId: EXTERNAL_JOB_ID,
+        firstName: "HTN",
+        lastName: "Submission Test",
+        email: "recruiter.candidate@example.com",
+        source: "RECRUITER",
+        recruiterId: "recruiter-1",
+        recruiterOrganizationId: "org-htn",
+      });
+
+      expect(mockTx.application.create.mock.calls[0][0].data.source).toBe("RECRUITER");
+      expect(mockTx.htnAtsSubmissionSync.upsert).toHaveBeenCalledOnce();
+      expect(mockTx.htnAtsSubmissionSync.upsert.mock.calls[0][0]).toEqual(
+        expect.objectContaining({
+          where: { applicationId: "app-recruiter-1" },
+          create: expect.objectContaining({
+            applicationId: "app-recruiter-1",
+            status: "PENDING",
+            attemptCount: 0,
+            recruiterId: "recruiter-1",
+            recruiterOrganizationId: "org-htn",
+          }),
+        }),
+      );
+    });
+
+    it("does not create ATS sync state for careers-site applications", async () => {
+      mockTx.job.findFirst.mockResolvedValue(VALID_JOB);
+      mockTx.candidate.findFirst.mockResolvedValue(null);
+      mockTx.candidate.create.mockResolvedValue({
+        id: "candidate-1",
+        email: "john@example.com",
+      });
+      mockTx.application.create.mockResolvedValue({
+        id: "app-1",
+        candidateId: "candidate-1",
+        jobId: INTERNAL_JOB_ID,
+        source: "CAREERS_SITE",
+      });
+
+      await service.createApplication({
+        jobId: EXTERNAL_JOB_ID,
+        firstName: "John",
+        lastName: "Doe",
+        email: "john@example.com",
+      });
+
+      expect(mockTx.application.create.mock.calls[0][0].data.source).toBe("CAREERS_SITE");
+      expect(mockTx.htnAtsSubmissionSync.upsert).not.toHaveBeenCalled();
+    });
+
+    it("returns an existing recruiter application instead of duplicating it", async () => {
+      mockTx.job.findFirst.mockResolvedValue(VALID_JOB);
+      mockTx.candidate.findFirst.mockResolvedValue({ id: "candidate-1", email: "recruiter.candidate@example.com" });
+      mockTx.application.findFirst.mockResolvedValue({ id: "app-recruiter-1", source: "RECRUITER" });
+      mockTx.application.findUnique.mockResolvedValue({
+        id: "app-recruiter-1",
+        candidateId: "candidate-1",
+        jobId: INTERNAL_JOB_ID,
+        source: "RECRUITER",
+      });
+
+      const result = await service.createApplication({
+        jobId: EXTERNAL_JOB_ID,
+        firstName: "HTN",
+        lastName: "Submission Test",
+        email: "recruiter.candidate@example.com",
+        source: "RECRUITER",
+      });
+
+      expect(result.id).toBe("app-recruiter-1");
+      expect(mockTx.application.create).not.toHaveBeenCalled();
+      expect(mockTx.htnAtsSubmissionSync.upsert).toHaveBeenCalledOnce();
     });
   });
 });

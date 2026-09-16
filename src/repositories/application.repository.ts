@@ -1,221 +1,25 @@
+import prisma from "../prisma/client.js";
 import { Prisma, OrganizationType, ApplicationStatus, ApplicationSource, DocumentType } from "@prisma/client";
-
-const APPLICATION_INCLUDES = {
-  candidate: {
-    select: {
-      id: true,
-      firstName: true,
-      lastName: true,
-      email: true,
-    },
-  },
-  job: {
-    select: {
-      id: true,
-      title: true,
-      status: true,
-    },
-  },
-} as const;
-
-export type ApplicationWithRelations = Prisma.ApplicationGetPayload<{
-  include: typeof APPLICATION_INCLUDES;
-}>;
-
-type Client = Prisma.TransactionClient;
-
-export interface CandidateData {
-  email: string;
-  firstName: string;
-  lastName: string;
-  phone?: string | null;
-  linkedinUrl?: string | null;
-  portfolioUrl?: string | null;
-  githubUrl?: string | null;
-  location?: string | null;
-  currentCompany?: string | null;
-  currentTitle?: string | null;
-  yearsExperience?: number | null;
-  desiredSalary?: number | null;
-  noticePeriod?: number | null;
-}
-
-export interface ApplicationData {
-  candidateId: string;
-  jobId: string;
-  status: ApplicationStatus;
-  submittedAt: Date;
-  source: ApplicationSource;
-  additionalNotes?: string | null;
-  coverLetter?: string | null;
-  salaryExpectation?: number | null;
-  noticePeriod?: number | null;
-  metadata?: Prisma.InputJsonValue;
-}
-
-export interface ResumeDocumentData {
-  candidateId: string;
-  storageKey: string;
-  fileName: string;
-  mimeType: string;
-  size: number;
-  checksum?: string | null;
-}
-
-export class ApplicationRepository {
-  async findJobById(client: Client, jobId: string) {
-    return client.job.findFirst({
-      where: { externalId: jobId },
-      select: { id: true, title: true, status: true },
-    });
-  }
-
-  async findCandidateByEmail(client: Client, email: string) {
-    return client.candidate.findFirst({
-      where: { email },
-    });
-  }
-
-  async findApplicationByCandidateAndJob(
-    client: Client,
-    candidateId: string,
-    jobId: string,
-  ) {
-    return client.application.findFirst({
-      where: { candidateId, jobId },
-      select: { id: true },
-    });
-  }
-
-  async upsertCandidate(
-    client: Client,
-    data: CandidateData,
-    existingCandidateId?: string | null,
-  ) {
-    const { currentCompany, ...candidateFields } = data;
-
-    let currentOrganizationId: string | undefined;
-
-    if (currentCompany && currentCompany.trim()) {
-      currentOrganizationId = await this.findOrCreateOrganization(
-        client,
-        currentCompany.trim(),
-      );
-    }
-
-    if (existingCandidateId) {
-      const updateData: Record<string, unknown> = {
-        firstName: candidateFields.firstName,
-        lastName: candidateFields.lastName,
-        email: candidateFields.email,
-      };
-
-      if (candidateFields.phone && candidateFields.phone.trim()) updateData.phone = candidateFields.phone.trim();
-      if (candidateFields.linkedinUrl && candidateFields.linkedinUrl.trim()) updateData.linkedinUrl = candidateFields.linkedinUrl.trim();
-      if (candidateFields.portfolioUrl && candidateFields.portfolioUrl.trim()) updateData.portfolioUrl = candidateFields.portfolioUrl.trim();
-      if (candidateFields.githubUrl && candidateFields.githubUrl.trim()) updateData.githubUrl = candidateFields.githubUrl.trim();
-      if (candidateFields.location && candidateFields.location.trim()) {
-        updateData.location = candidateFields.location.trim();
-        updateData.city = candidateFields.location.trim();
-      }
-      if (candidateFields.currentTitle && candidateFields.currentTitle.trim()) updateData.currentTitle = candidateFields.currentTitle.trim();
-      if (candidateFields.yearsExperience !== undefined && candidateFields.yearsExperience !== null) updateData.yearsExperience = candidateFields.yearsExperience;
-      if (candidateFields.desiredSalary !== undefined && candidateFields.desiredSalary !== null) updateData.desiredSalary = candidateFields.desiredSalary;
-      if (candidateFields.noticePeriod !== undefined && candidateFields.noticePeriod !== null) updateData.noticePeriod = candidateFields.noticePeriod;
-      if (currentOrganizationId) updateData.currentOrganizationId = currentOrganizationId;
-
-      return client.candidate.update({
-        where: { id: existingCandidateId },
-        data: updateData,
-      });
-    }
-
-    return client.candidate.create({
-      data: {
-        ...candidateFields,
-        city:
-          candidateFields.location && candidateFields.location.trim()
-            ? candidateFields.location.trim()
-            : undefined,
-        currentOrganizationId,
-      },
-    });
-  }
-
-  async createApplication(client: Client, data: ApplicationData) {
-    return client.application.create({
-      data: {
-        candidateId: data.candidateId,
-        jobId: data.jobId,
-        status: data.status,
-        submittedAt: data.submittedAt,
-        source: data.source,
-        coverLetter: data.coverLetter,
-        additionalNotes: data.additionalNotes,
-        salaryExpectation: data.salaryExpectation,
-        noticePeriod: data.noticePeriod,
-        metadata: data.metadata,
-      },
-      include: APPLICATION_INCLUDES,
-    });
-  }
-
-  async createResumeDocument(client: Client, data: ResumeDocumentData) {
-    return client.document.create({
-      data: {
-        candidateId: data.candidateId,
-        type: DocumentType.RESUME,
-        storageProvider: "CLOUDFLARE_R2",
-        storageKey: data.storageKey,
-        fileName: data.fileName,
-        mimeType: data.mimeType,
-        size: data.size,
-        checksum: data.checksum,
-        version: 1,
-        isLatest: true,
-      },
-    });
-  }
-
-  async setTalentPoolConsent(
-    client: Client,
-    candidateId: string,
-    data: {
-      contactConsentAt: Date;
-      consentSource: string;
-      metadata?: Record<string, unknown> | null;
-    },
-  ) {
-    const updateData: Record<string, unknown> = {
-      inTalentPool: true,
-      contactConsent: true,
-      contactConsentAt: data.contactConsentAt,
-      consentSource: data.consentSource,
-    };
-
-    if (data.metadata) {
-      updateData.metadata = data.metadata as Prisma.InputJsonValue;
-    }
-
-    return client.candidate.update({
-      where: { id: candidateId },
-      data: updateData,
-    });
-  }
-
-  private async findOrCreateOrganization(client: Client, name: string): Promise<string> {
-    const existing = await client.organization.findFirst({
-      where: { name: { equals: name, mode: "insensitive" } },
-      select: { id: true },
-    });
-
-    if (existing) return existing.id;
-
-    const created = await client.organization.create({
-      data: { name, type: OrganizationType.COMPANY },
-      select: { id: true },
-    });
-
-    return created.id;
-  }
+const APPLICATION_INCLUDES={candidate:{select:{id:true,firstName:true,lastName:true,email:true,phone:true,location:true,currentTitle:true,yearsExperience:true,linkedinUrl:true,documents:{where:{type:DocumentType.RESUME,isLatest:true},orderBy:{createdAt:"desc" as const},take:1,select:{id:true,fileName:true,mimeType:true,size:true,storageKey:true,createdAt:true}}}},job:{select:{id:true,externalId:true,title:true,status:true,location:true,organization:{select:{id:true,externalId:true,name:true}}}}} as const;
+export type ApplicationWithRelations=Prisma.ApplicationGetPayload<{include:typeof APPLICATION_INCLUDES}>;
+type Client=Prisma.TransactionClient;
+export interface ApplicationListFilters{jobId?:string;jobIds?:string[];status?:ApplicationStatus;search?:string;page?:number;limit?:number;}
+export interface CandidateData{email:string;firstName:string;lastName:string;phone?:string|null;linkedinUrl?:string|null;portfolioUrl?:string|null;githubUrl?:string|null;location?:string|null;currentCompany?:string|null;currentTitle?:string|null;yearsExperience?:number|null;desiredSalary?:number|null;noticePeriod?:number|null;}
+export interface ApplicationData{candidateId:string;jobId:string;status:ApplicationStatus;submittedAt:Date;source:ApplicationSource;additionalNotes?:string|null;coverLetter?:string|null;salaryExpectation?:number|null;noticePeriod?:number|null;metadata?:Prisma.InputJsonValue;}
+export interface ResumeDocumentData{candidateId:string;storageKey:string;fileName:string;mimeType:string;size:number;checksum?:string|null;}
+export interface TalentPoolConsentData{contactConsentAt:Date;consentSource:string;metadata?:Prisma.InputJsonValue;}
+export class ApplicationRepository{
+ async findMany(filters:ApplicationListFilters={}){const page=filters.page??1,limit=filters.limit??20,skip=(page-1)*limit;const where:Prisma.ApplicationWhereInput={};if(filters.jobId)where.job={OR:[{id:filters.jobId},{externalId:filters.jobId}]};if(filters.jobIds?.length)where.jobId={in:filters.jobIds};if(filters.status)where.status=filters.status;if(filters.search)where.OR=[{candidate:{firstName:{contains:filters.search,mode:"insensitive"}}},{candidate:{lastName:{contains:filters.search,mode:"insensitive"}}},{candidate:{email:{contains:filters.search,mode:"insensitive"}}},{job:{title:{contains:filters.search,mode:"insensitive"}}}];const[applications,total]=await Promise.all([prisma.application.findMany({where,include:APPLICATION_INCLUDES,orderBy:[{submittedAt:"desc"},{createdAt:"desc"}],skip,take:limit}),prisma.application.count({where})]);return{applications,total};}
+ async findById(id:string){return prisma.application.findUnique({where:{id},include:APPLICATION_INCLUDES});}
+ async findByIdOn(client:Client,id:string){return client.application.findUnique({where:{id},include:APPLICATION_INCLUDES});}
+ async ensureAtsSyncRecord(client:Client,applicationId:string,recruiter?:{id:string;organizationId?:string|null}){const recruiterId=recruiter?.id?.trim()||undefined;const recruiterOrganizationId=recruiter?.organizationId?.trim()||undefined;return client.htnAtsSubmissionSync.upsert({where:{applicationId},create:{applicationId,status:"PENDING",attemptCount:0,nextRetryAt:new Date(),recruiterId,recruiterOrganizationId},update:recruiterId?{recruiterId,recruiterOrganizationId}:{}});}
+ async updateStatus(id:string,status:ApplicationStatus){return prisma.application.update({where:{id},data:{status},include:APPLICATION_INCLUDES});}
+ async findJobById(client:Client,jobId:string){return client.job.findFirst({where:{OR:[{id:jobId},{externalId:jobId}]},select:{id:true,title:true,status:true}});}
+ async findCandidateByEmail(client:Client,email:string){return client.candidate.findFirst({where:{email}});}
+ async findApplicationByCandidateAndJob(client:Client,candidateId:string,jobId:string){return client.application.findFirst({where:{candidateId,jobId},select:{id:true,source:true}});}
+ async upsertCandidate(client:Client,data:CandidateData,existingCandidateId?:string|null){const{currentCompany,...candidateFields}=data;let currentOrganizationId:string|undefined;if(currentCompany&&currentCompany.trim())currentOrganizationId=await this.findOrCreateOrganization(client,currentCompany.trim());if(existingCandidateId){const updateData:Record<string,unknown>={firstName:candidateFields.firstName,lastName:candidateFields.lastName,email:candidateFields.email};if(candidateFields.phone?.trim())updateData.phone=candidateFields.phone.trim();if(candidateFields.linkedinUrl?.trim())updateData.linkedinUrl=candidateFields.linkedinUrl.trim();if(candidateFields.portfolioUrl?.trim())updateData.portfolioUrl=candidateFields.portfolioUrl.trim();if(candidateFields.githubUrl?.trim())updateData.githubUrl=candidateFields.githubUrl.trim();if(candidateFields.location?.trim()){updateData.location=candidateFields.location.trim();updateData.city=candidateFields.location.trim();}if(candidateFields.currentTitle?.trim())updateData.currentTitle=candidateFields.currentTitle.trim();if(candidateFields.yearsExperience!=null)updateData.yearsExperience=candidateFields.yearsExperience;if(candidateFields.desiredSalary!=null)updateData.desiredSalary=candidateFields.desiredSalary;if(candidateFields.noticePeriod!=null)updateData.noticePeriod=candidateFields.noticePeriod;if(currentOrganizationId)updateData.currentOrganizationId=currentOrganizationId;return client.candidate.update({where:{id:existingCandidateId},data:updateData});}return client.candidate.create({data:{...candidateFields,city:candidateFields.location?.trim()?candidateFields.location.trim():undefined,currentOrganizationId}});}
+ async setTalentPoolConsent(client:Client,candidateId:string,data:TalentPoolConsentData){return client.candidate.update({where:{id:candidateId},data:{inTalentPool:true,contactConsent:true,contactConsentAt:data.contactConsentAt,consentSource:data.consentSource,metadata:data.metadata}});}
+ async createApplication(client:Client,data:ApplicationData){return client.application.create({data:{candidateId:data.candidateId,jobId:data.jobId,status:data.status,submittedAt:data.submittedAt,source:data.source,coverLetter:data.coverLetter,additionalNotes:data.additionalNotes,salaryExpectation:data.salaryExpectation,noticePeriod:data.noticePeriod,metadata:data.metadata},include:APPLICATION_INCLUDES});}
+ async createResumeDocument(client:Client,data:ResumeDocumentData){return client.document.create({data:{candidateId:data.candidateId,type:DocumentType.RESUME,storageProvider:"CLOUDFLARE_R2",storageKey:data.storageKey,fileName:data.fileName,mimeType:data.mimeType,size:data.size,checksum:data.checksum,version:1,isLatest:true}});}
+ private async findOrCreateOrganization(client:Client,name:string):Promise<string>{const existing=await client.organization.findFirst({where:{name:{equals:name,mode:"insensitive"}},select:{id:true}});if(existing)return existing.id;const created=await client.organization.create({data:{name,type:OrganizationType.COMPANY},select:{id:true}});return created.id;}
 }

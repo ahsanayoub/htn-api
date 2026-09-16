@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import prisma from "../prisma/client.js";
 import { AppError } from "../errors/app-error.js";
 import { ApplicationRepository } from "../repositories/application.repository.js";
@@ -97,9 +98,8 @@ export class CandidateService {
         );
 
         const existingMetadata =
-          (candidate.metadata as unknown as Record<string, unknown> | null) ??
-          null;
-        const extraMetadata: Record<string, unknown> = {};
+          (candidate.metadata as Prisma.JsonObject | null) ?? {};
+        const extraMetadata: Prisma.JsonObject = {};
         if (validated.certifications)
           extraMetadata.certifications = validated.certifications;
         if (validated.additionalNotes)
@@ -110,7 +110,7 @@ export class CandidateService {
           consentSource: "CAREERS_SITE",
           metadata:
             Object.keys(extraMetadata).length > 0
-              ? { ...existingMetadata, ...extraMetadata }
+              ? ({ ...existingMetadata, ...extraMetadata } as Prisma.InputJsonValue)
               : undefined,
         });
 
