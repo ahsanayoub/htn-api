@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import prisma from "../prisma/client.js";
 import { AppError } from "../errors/app-error.js";
 import { ApplicationRepository } from "../repositories/application.repository.js";
+import { synchronizeHtnTalentCandidate } from "./htn-ats-candidate-sync.service.js";
 import { R2StorageService } from "./r2-storage.service.js";
 
 export interface TalentNetworkInput {
@@ -55,6 +56,15 @@ function sanitizeNumber(value: unknown): number | undefined {
 export class CandidateService {
   private readonly repository = new ApplicationRepository();
   private storage: R2StorageService | undefined;
+  private readonly syncTalentCandidateToAts: (htnCandidateId: string) => Promise<unknown>;
+
+  constructor(options?: {
+    syncTalentCandidateToAts?: (htnCandidateId: string) => Promise<unknown>;
+  }) {
+    this.syncTalentCandidateToAts =
+      options?.syncTalentCandidateToAts ??
+      ((htnCandidateId) => synchronizeHtnTalentCandidate({ htnCandidateId }));
+  }
 
   private getStorage(): R2StorageService {
     this.storage ??= new R2StorageService();
@@ -133,6 +143,16 @@ export class CandidateService {
           updatedAt: updated.updatedAt,
         };
       });
+
+      // Durable ATS candidate sync: never fail the HTN intake if ATS is down.
+      try {
+        await this.syncTalentCandidateToAts(result.id);
+      } catch (error) {
+        console.error(
+          "Talent network ATS sync deferred for retry:",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
 
       return result;
     } catch (error) {
