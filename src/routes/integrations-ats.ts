@@ -2,8 +2,10 @@ import { Router } from "express";
 import { randomUUID } from "node:crypto";
 import prisma from "../prisma/client.js";
 import { AppError } from "../errors/app-error.js";
+import { ApplicationService } from "../services/applications.service.js";
 
 const router = Router();
+const applicationService = new ApplicationService();
 
 function requireIntegrationKey(req: { headers: Record<string, unknown> }) {
   const expected = process.env.HTN_ATS_INTEGRATION_KEY;
@@ -47,6 +49,56 @@ function sendError(res: any, error: unknown) {
   console.error("ATS integration failed:", error);
   return res.status(500).json({ success: false, message: "Internal server error" });
 }
+
+/**
+ * ATS → HTN application status sync.
+ * htnSubmissionId is the HTN Application.id established by outbound submission sync.
+ * Does not trigger HTN → ATS submission synchronization.
+ */
+router.put("/submissions/:htnSubmissionId", async (req, res) => {
+  try {
+    requireIntegrationKey(req);
+
+    const htnSubmissionId = text(req.params.htnSubmissionId);
+    if (!htnSubmissionId) {
+      throw new AppError("VALIDATION_ERROR", "htnSubmissionId is required", 400);
+    }
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    if (body.atsApplicationId !== undefined && typeof body.atsApplicationId !== "string") {
+      throw new AppError("VALIDATION_ERROR", "atsApplicationId must be a string when provided", 400);
+    }
+    if (body.atsStage !== undefined && typeof body.atsStage !== "string") {
+      throw new AppError("VALIDATION_ERROR", "atsStage must be a string when provided", 400);
+    }
+    if (body.changedAt !== undefined) {
+      if (typeof body.changedAt !== "string" || !isoDate(body.changedAt)) {
+        throw new AppError("VALIDATION_ERROR", "changedAt must be a valid ISO-8601 timestamp when provided", 400);
+      }
+    }
+
+    const application = await applicationService.updateApplicationStatus(
+      htnSubmissionId,
+      body.status,
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        id: application.id,
+        status: application.status,
+        candidateId: application.candidateId,
+        jobId: application.jobId,
+        source: application.source,
+        atsApplicationId: text(body.atsApplicationId),
+        atsStage: text(body.atsStage),
+        changedAt: text(body.changedAt),
+      },
+    });
+  } catch (error) {
+    return sendError(res, error);
+  }
+});
 
 /**
  * Upsert an ATS job into HTN.

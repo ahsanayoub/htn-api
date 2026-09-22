@@ -68,9 +68,13 @@ export class ApplicationService {
   async getApplicationById(id: string) { return this.repository.findById(id); }
 
   async updateApplicationStatus(id: string, status: unknown) {
-    if (typeof status !== "string" || !Object.values(ApplicationStatus).includes(status as ApplicationStatus)) throw new AppError("VALIDATION_ERROR", "Invalid application status", 400);
+    if (typeof status !== "string" || !Object.values(ApplicationStatus).includes(status as ApplicationStatus)) {
+      throw new AppError("VALIDATION_ERROR", "Invalid application status", 400);
+    }
     const existing = await this.repository.findById(id);
     if (!existing) throw new AppError("APPLICATION_NOT_FOUND", "Application not found", 404);
+    // Idempotent: same status is a no-op (no write / no outbound ATS sync side effects).
+    if (existing.status === status) return existing;
     return this.repository.updateStatus(id, status as ApplicationStatus);
   }
 
