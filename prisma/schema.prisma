@@ -90,6 +90,7 @@ model Job {
   postedAt                DateTime?
   expiresAt               DateTime?
   status                  JobStatus       @default(IMPORTED)
+  visibility              JobVisibility   @default(PUBLIC)
   applyUrl                String?
   canonicalUrl            String?
   metadata                Json?
@@ -107,6 +108,7 @@ model Job {
   @@index([source])
   @@index([organizationId])
   @@index([status])
+  @@index([status, visibility])
   @@index([employmentType])
   @@index([workplaceType])
   @@index([postedAt])
@@ -361,6 +363,11 @@ enum JobStatus {
   ON_HOLD
   CLOSED
   ARCHIVED
+}
+
+enum JobVisibility {
+  PUBLIC
+  INTERNAL
 }
 
 enum CandidateStatus {

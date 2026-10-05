@@ -1,6 +1,6 @@
 import { JobRepository } from "../repositories/job.repository.js";
 import { mapPrismaJobToApiJob } from "../mappers/job.mapper.js";
-import { JobStatus } from "@prisma/client";
+import { JobStatus, JobVisibility } from "@prisma/client";
 import type { Job } from "../types/job.js";
 
 const jobRepository = new JobRepository();
@@ -16,6 +16,11 @@ export interface JobFilters {
     posted?: number;
     sort?: "newest" | "oldest";
     status?: JobStatus;
+    /**
+     * Public careers API always forces PUBLIC.
+     * Callers that need INTERNAL (none currently on public routes) must opt in explicitly.
+     */
+    visibility?: JobVisibility;
 }
 
 export interface JobSearchResult {
@@ -30,8 +35,15 @@ export interface JobSearchResult {
     };
 }
 
+/**
+ * Public job detail lookup.
+ * Only returns PUBLIC jobs so INTERNAL ATS projections are not exposed by ID.
+ * CLOSED + PUBLIC remains reachable (historical careers deep-link behavior).
+ */
 export async function getJobById(jobId: string): Promise<Job | null> {
-    const prismaJob = await jobRepository.findByExternalId(jobId);
+    const prismaJob = await jobRepository.findByExternalId(jobId, {
+        visibility: JobVisibility.PUBLIC,
+    });
 
     if (!prismaJob) {
         return null;
@@ -57,6 +69,8 @@ export async function getJobs(
         page,
         limit,
         status: filters.status ?? JobStatus.ACTIVE,
+        // Public safety boundary: never list INTERNAL jobs from this service.
+        visibility: filters.visibility ?? JobVisibility.PUBLIC,
     });
 
     const totalPages = Math.ceil(total / limit);

@@ -4,6 +4,7 @@ import {
   EmploymentType,
   JobSource,
   JobStatus,
+  JobVisibility,
   WorkplaceType,
 } from "@prisma/client";
 
@@ -28,6 +29,8 @@ export interface JobQueryParams {
   page?: number;
   limit?: number;
   status?: JobStatus;
+  /** When set, restricts results to this visibility (public API uses PUBLIC). */
+  visibility?: JobVisibility;
 }
 
 export interface JobUpsertData {
@@ -49,6 +52,7 @@ export interface JobUpsertData {
   applyUrl?: string | null;
   canonicalUrl?: string | null;
   status?: JobStatus;
+  visibility?: JobVisibility;
   sourceVersion?: string | null;
   skillNames?: string[];
   salaryMin?: number | null;
@@ -144,9 +148,15 @@ export class JobRepository {
     return { jobs, total };
   }
 
-  async findByExternalId(externalId: string): Promise<JobWithRelations | null> {
+  async findByExternalId(
+    externalId: string,
+    options?: { visibility?: JobVisibility },
+  ): Promise<JobWithRelations | null> {
     return prisma.job.findFirst({
-      where: { externalId },
+      where: {
+        externalId,
+        ...(options?.visibility ? { visibility: options.visibility } : {}),
+      },
       include: JOB_INCLUDES,
     });
   }
@@ -187,6 +197,7 @@ export class JobRepository {
           applyUrl: data.applyUrl,
           canonicalUrl: data.canonicalUrl,
           status: data.status ?? JobStatus.IMPORTED,
+          visibility: data.visibility ?? JobVisibility.PUBLIC,
           sourceVersion: data.sourceVersion,
           salaryMin: data.salaryMin,
           salaryMax: data.salaryMax,
@@ -213,6 +224,7 @@ export class JobRepository {
           applyUrl: data.applyUrl,
           canonicalUrl: data.canonicalUrl,
           status: data.status ?? JobStatus.IMPORTED,
+          ...(data.visibility !== undefined ? { visibility: data.visibility } : {}),
           sourceVersion: data.sourceVersion,
           salaryMin: data.salaryMin,
           salaryMax: data.salaryMax,
@@ -351,6 +363,10 @@ export class JobRepository {
 
     if (params.status) {
       where.status = { equals: params.status };
+    }
+
+    if (params.visibility) {
+      where.visibility = { equals: params.visibility };
     }
 
     return where;

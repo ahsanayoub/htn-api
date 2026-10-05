@@ -1,7 +1,7 @@
 import "dotenv/config";
 
 import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
-import { JobStatus, JobSource } from "@prisma/client";
+import { JobStatus, JobSource, JobVisibility } from "@prisma/client";
 import prisma from "../../src/prisma/client.js";
 import { JobRepository } from "../../src/repositories/job.repository.js";
 import { getJobs, getJobById } from "../../src/services/jobs.service.js";
@@ -296,5 +296,74 @@ suite("Jobs API — ACTIVE status filtering", () => {
     const returnedIds = result.jobs.map((j) => j.externalId);
     expect(returnedIds).toContain(active.externalId);
     expect(returnedIds).not.toContain(closed.externalId);
+  });
+
+  it("ACTIVE + PUBLIC appears in public jobs list", async () => {
+    const job = await prisma.job.create({
+      data: {
+        externalId: `test-vis-public-${Date.now()}`,
+        source: JobSource.MICRO1,
+        title: "Public Active Job",
+        organization: { connect: { id: orgId } },
+        status: JobStatus.ACTIVE,
+        visibility: JobVisibility.PUBLIC,
+      },
+    });
+    createdJobIds.push(job.id);
+
+    const result = await getJobs({}, 1, 100);
+    expect(result.jobs.map((j) => j.jobId)).toContain(job.externalId);
+  });
+
+  it("ACTIVE + INTERNAL does not appear in public jobs list", async () => {
+    const job = await prisma.job.create({
+      data: {
+        externalId: `test-vis-internal-${Date.now()}`,
+        source: JobSource.OTHER,
+        title: "Internal Active Job",
+        organization: { connect: { id: orgId } },
+        status: JobStatus.ACTIVE,
+        visibility: JobVisibility.INTERNAL,
+        metadata: { integration: "HTN_ATS", origin: "ats" },
+      },
+    });
+    createdJobIds.push(job.id);
+
+    const result = await getJobs({}, 1, 100);
+    expect(result.jobs.map((j) => j.jobId)).not.toContain(job.externalId);
+  });
+
+  it("CLOSED + PUBLIC does not appear in public jobs list", async () => {
+    const job = await prisma.job.create({
+      data: {
+        externalId: `test-vis-closed-public-${Date.now()}`,
+        source: JobSource.MICRO1,
+        title: "Closed Public Job",
+        organization: { connect: { id: orgId } },
+        status: JobStatus.CLOSED,
+        visibility: JobVisibility.PUBLIC,
+      },
+    });
+    createdJobIds.push(job.id);
+
+    const result = await getJobs({}, 1, 100);
+    expect(result.jobs.map((j) => j.jobId)).not.toContain(job.externalId);
+  });
+
+  it("GET-by-id does not expose INTERNAL jobs", async () => {
+    const job = await prisma.job.create({
+      data: {
+        externalId: `test-vis-detail-internal-${Date.now()}`,
+        source: JobSource.OTHER,
+        title: "Internal Detail Job",
+        organization: { connect: { id: orgId } },
+        status: JobStatus.ACTIVE,
+        visibility: JobVisibility.INTERNAL,
+      },
+    });
+    createdJobIds.push(job.id);
+
+    const result = await getJobById(job.externalId!);
+    expect(result).toBeNull();
   });
 });

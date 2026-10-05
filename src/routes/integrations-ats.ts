@@ -100,9 +100,48 @@ router.put("/submissions/:htnSubmissionId", async (req, res) => {
   }
 });
 
+type ExistingAtsJob = { id: string; source: string };
+
+/**
+ * Resolve which HTN Job row an ATS upsert may touch.
+ *
+ * - OTHER + externalId → update that row
+ * - MANUAL + externalId only → refuse (no silent duplicate OTHER row)
+ * - neither → create OTHER + INTERNAL
+ */
+async function resolveAtsJobTarget(atsJobId: string): Promise<
+  | { action: "update"; jobId: string }
+  | { action: "create" }
+> {
+  const other = await prisma.$queryRawUnsafe<ExistingAtsJob[]>(
+    `SELECT id, source::text AS source FROM "Job" WHERE source = 'OTHER' AND "externalId" = $1 LIMIT 1`,
+    atsJobId,
+  );
+  if (other[0]) {
+    return { action: "update", jobId: other[0].id };
+  }
+
+  const manual = await prisma.$queryRawUnsafe<ExistingAtsJob[]>(
+    `SELECT id, source::text AS source FROM "Job" WHERE source = 'MANUAL' AND "externalId" = $1 LIMIT 1`,
+    atsJobId,
+  );
+  if (manual[0]) {
+    throw new AppError(
+      "ATS_JOB_SOURCE_COLLISION",
+      "An existing MANUAL job already owns this ATS externalId; refusing to create a duplicate OTHER row. Controlled remapping is required before ATS sync can update this job.",
+      409,
+    );
+  }
+
+  return { action: "create" };
+}
+
 /**
  * Upsert an ATS job into HTN.
  * ATS remains the source of truth; HTN stores an external projection used by recruiters.
+ *
+ * New / OTHER rows: source=OTHER, visibility=INTERNAL.
+ * Does not create OTHER duplicates for existing MANUAL+same externalId rows.
  */
 router.put("/jobs/:atsJobId", async (req, res) => {
   try {
@@ -143,92 +182,97 @@ router.put("/jobs/:atsJobId", async (req, res) => {
       );
     }
 
-    const requirements = body.requirements ?? null;
+    const bodyMetadata =
+      body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata)
+        ? (body.metadata as Record<string, unknown>)
+        : {};
+
+    const requirements = body.requirements ?? bodyMetadata.atsRequirements ?? null;
     const metadata = {
-      ...(body.metadata && typeof body.metadata === "object" ? body.metadata : {}),
+      ...bodyMetadata,
+      origin: "ats",
       integration: "HTN_ATS",
       atsJobId,
       atsOrganizationId: organizationExternalId,
+      atsClientId:
+        bodyMetadata.atsClientId === undefined ? null : bodyMetadata.atsClientId,
       syncedAt: new Date().toISOString(),
+      atsRequirements: bodyMetadata.atsRequirements ?? requirements,
     };
 
-    const existing = await prisma.$queryRawUnsafe<{ id: string }[]>(
-      `SELECT id FROM "Job" WHERE "source"='OTHER' AND "externalId"=$1 LIMIT 1`,
-      atsJobId,
-    );
-    const jobId = existing[0]?.id ?? randomUUID();
+    const target = await resolveAtsJobTarget(atsJobId);
+    const jobId = target.action === "update" ? target.jobId : randomUUID();
 
-    if (existing[0]) {
+    const fieldValues = [
+      organizationId,
+      title,
+      text(body.summary),
+      text(body.description),
+      text(body.descriptionHtml),
+      text(body.responsibilities),
+      requirements,
+      text(body.preferredQualifications),
+      text(body.employmentType),
+      text(body.workplaceType),
+      text(body.department),
+      text(body.seniority),
+      numberValue(body.experienceMin),
+      numberValue(body.experienceMax),
+      numberValue(body.salaryMin),
+      numberValue(body.salaryMax),
+      text(body.salaryCurrency),
+      text(body.location),
+      text(body.country),
+      text(body.city),
+      booleanValue(body.remote),
+      numberValue(body.openings) ?? 1,
+      isoDate(body.postedAt),
+      isoDate(body.expiresAt),
+      mapJobStatus(body.status),
+      text(body.applyUrl),
+      text(body.canonicalUrl),
+      JSON.stringify(metadata),
+    ] as const;
+
+    if (target.action === "update") {
       await prisma.$executeRawUnsafe(
-        `UPDATE "Job" SET "organizationId"=$1,title=$2,summary=$3,description=$4,"descriptionHtml"=$5,responsibilities=$6,requirements=$7,"preferredQualifications"=$8,"employmentType"=$9,"workplaceType"=$10,department=$11,seniority=$12,"experienceMin"=$13,"experienceMax"=$14,"salaryMin"=$15,"salaryMax"=$16,"salaryCurrency"=$17,location=$18,country=$19,city=$20,remote=$21,openings=$22,"postedAt"=$23,"expiresAt"=$24,status=$25,"applyUrl"=$26,"canonicalUrl"=$27,metadata=$28,"lastSyncedAt"=NOW(),"updatedAt"=NOW() WHERE id=$29`,
-        organizationId,
-        title,
-        text(body.summary),
-        text(body.description),
-        text(body.descriptionHtml),
-        text(body.responsibilities),
-        requirements,
-        text(body.preferredQualifications),
-        text(body.employmentType),
-        text(body.workplaceType),
-        text(body.department),
-        text(body.seniority),
-        numberValue(body.experienceMin),
-        numberValue(body.experienceMax),
-        numberValue(body.salaryMin),
-        numberValue(body.salaryMax),
-        text(body.salaryCurrency),
-        text(body.location),
-        text(body.country),
-        text(body.city),
-        booleanValue(body.remote),
-        numberValue(body.openings) ?? 1,
-        isoDate(body.postedAt),
-        isoDate(body.expiresAt),
-        mapJobStatus(body.status),
-        text(body.applyUrl),
-        text(body.canonicalUrl),
-        JSON.stringify(metadata),
+        `UPDATE "Job" SET
+          "organizationId"=$1,title=$2,summary=$3,description=$4,"descriptionHtml"=$5,
+          responsibilities=$6,requirements=$7,"preferredQualifications"=$8,
+          "employmentType"=$9,"workplaceType"=$10,department=$11,seniority=$12,
+          "experienceMin"=$13,"experienceMax"=$14,"salaryMin"=$15,"salaryMax"=$16,"salaryCurrency"=$17,
+          location=$18,country=$19,city=$20,remote=$21,openings=$22,"postedAt"=$23,"expiresAt"=$24,
+          status=$25,"applyUrl"=$26,"canonicalUrl"=$27,metadata=$28,
+          visibility='INTERNAL',"lastSyncedAt"=NOW(),"lastSeenAt"=NOW(),"updatedAt"=NOW()
+        WHERE id=$29 AND source='OTHER'`,
+        ...fieldValues,
         jobId,
       );
     } else {
       await prisma.$executeRawUnsafe(
-        `INSERT INTO "Job"(id,"externalId","source","organizationId",title,summary,description,"descriptionHtml",responsibilities,requirements,"preferredQualifications","employmentType","workplaceType",department,seniority,"experienceMin","experienceMax","salaryMin","salaryMax","salaryCurrency",location,country,city,remote,openings,"postedAt","expiresAt",status,"applyUrl","canonicalUrl",metadata,"lastSyncedAt","createdAt","updatedAt") VALUES($1,$2,'OTHER',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,NOW(),NOW(),NOW())`,
+        `INSERT INTO "Job"(
+          id,"externalId","source","organizationId",title,summary,description,"descriptionHtml",
+          responsibilities,requirements,"preferredQualifications","employmentType","workplaceType",
+          department,seniority,"experienceMin","experienceMax","salaryMin","salaryMax","salaryCurrency",
+          location,country,city,remote,openings,"postedAt","expiresAt",status,"applyUrl","canonicalUrl",
+          metadata,visibility,"lastSyncedAt","lastSeenAt","createdAt","updatedAt"
+        ) VALUES (
+          $1,$2,'OTHER',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
+          'INTERNAL',NOW(),NOW(),NOW(),NOW()
+        )`,
         jobId,
         atsJobId,
-        organizationId,
-        title,
-        text(body.summary),
-        text(body.description),
-        text(body.descriptionHtml),
-        text(body.responsibilities),
-        requirements,
-        text(body.preferredQualifications),
-        text(body.employmentType),
-        text(body.workplaceType),
-        text(body.department),
-        text(body.seniority),
-        numberValue(body.experienceMin),
-        numberValue(body.experienceMax),
-        numberValue(body.salaryMin),
-        numberValue(body.salaryMax),
-        text(body.salaryCurrency),
-        text(body.location),
-        text(body.country),
-        text(body.city),
-        booleanValue(body.remote),
-        numberValue(body.openings) ?? 1,
-        isoDate(body.postedAt),
-        isoDate(body.expiresAt),
-        mapJobStatus(body.status),
-        text(body.applyUrl),
-        text(body.canonicalUrl),
-        JSON.stringify(metadata),
+        ...fieldValues,
       );
     }
 
     const rows = await prisma.$queryRawUnsafe<any[]>(
-      `SELECT j.id,j."externalId",j.title,j.status,j."organizationId",o.name AS "organizationName",j."lastSyncedAt" FROM "Job" j JOIN "Organization" o ON o.id=j."organizationId" WHERE j.id=$1 LIMIT 1`,
+      `SELECT j.id,j."externalId",j.source::text AS source,j.visibility::text AS visibility,j.title,j.status,
+              j."organizationId",o.name AS "organizationName",j."lastSyncedAt",j."lastSeenAt"
+       FROM "Job" j
+       JOIN "Organization" o ON o.id=j."organizationId"
+       WHERE j.id=$1
+       LIMIT 1`,
       jobId,
     );
 
