@@ -110,7 +110,14 @@ export class Micro1SyncAdapter implements SourceAdapter {
   }
 
   async getJobDetails(summary: SourceJobSummary): Promise<HTNJob> {
-    return await this.processor.process(summary.applyUrl);
+    const job = await this.processor.process(summary.applyUrl);
+    // Portal summary.apply_url is the authoritative public/apply URL (incl.
+    // query/referral params). The HTML parser leaves canonicalUrl undefined,
+    // so re-attach the summary URL onto sourceUrl for mapToUpsertData.
+    return {
+      ...job,
+      sourceUrl: summary.applyUrl,
+    };
   }
 
   mapToUpsertData(job: HTNJob, organizationId: string, syncStart: Date): JobUpsertData {
