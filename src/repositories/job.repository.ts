@@ -51,6 +51,7 @@ export interface JobUpsertData {
   expiresAt?: Date | null;
   applyUrl?: string | null;
   canonicalUrl?: string | null;
+  referralUrl?: string | null;
   status?: JobStatus;
   visibility?: JobVisibility;
   sourceVersion?: string | null;
@@ -196,6 +197,7 @@ export class JobRepository {
           expiresAt: data.expiresAt,
           applyUrl: data.applyUrl,
           canonicalUrl: data.canonicalUrl,
+          referralUrl: data.referralUrl,
           status: data.status ?? JobStatus.IMPORTED,
           visibility: data.visibility ?? JobVisibility.PUBLIC,
           sourceVersion: data.sourceVersion,
@@ -221,8 +223,9 @@ export class JobRepository {
           remote: data.remote,
           postedAt: data.postedAt,
           expiresAt: data.expiresAt,
-          applyUrl: data.applyUrl,
-          canonicalUrl: data.canonicalUrl,
+          ...(data.applyUrl !== undefined ? { applyUrl: data.applyUrl } : {}),
+          ...(data.canonicalUrl !== undefined ? { canonicalUrl: data.canonicalUrl } : {}),
+          ...(data.referralUrl !== undefined ? { referralUrl: data.referralUrl } : {}),
           status: data.status ?? JobStatus.IMPORTED,
           ...(data.visibility !== undefined ? { visibility: data.visibility } : {}),
           sourceVersion: data.sourceVersion,

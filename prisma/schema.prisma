@@ -93,6 +93,8 @@ model Job {
   visibility              JobVisibility   @default(PUBLIC)
   applyUrl                String?
   canonicalUrl            String?
+  /// Micro1 (or similar) referral-attributed outreach URL. Not the HTN careers apply URL.
+  referralUrl             String?
   metadata                Json?
   createdAt               DateTime        @default(now())
   updatedAt               DateTime        @updatedAt

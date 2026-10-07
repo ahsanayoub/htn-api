@@ -20,4 +20,12 @@ export interface Micro1JobSummaryDTO {
     location_type: string | null;
 
     engagement_type: string | null;
+
+    /** Present on Referral Dashboard eligible-jobs summaries. */
+    ideal_hourly_rate?: number | null;
+    ideal_monthly_rate?: number | null;
+    ideal_yearly_rate?: number | null;
+    no_of_openings?: number | null;
+    referral_reward_amount?: number | null;
+    is_high_demand_job?: boolean | null;
 }

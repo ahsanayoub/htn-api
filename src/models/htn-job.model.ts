@@ -8,6 +8,9 @@ export interface HTNJob {
     externalId: string;
   
     sourceUrl?: string;
+
+    /** Referral-attributed outreach URL (e.g. Micro1 eligible-jobs apply_url). */
+    referralUrl?: string;
   
     title: string;
   

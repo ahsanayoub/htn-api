@@ -4,8 +4,11 @@ import type { Micro1Processor } from "../processors/micro1.processor.js";
 import type { HTNJob } from "../models/htn-job.model.js";
 import type { JobUpsertData } from "../repositories/job.repository.js";
 import type { SourceAdapter, SourceJobSummary } from "./source.adapter.js";
-import type { Micro1PortalResponseDTO } from "../dto/micro1-portal-response.dto.js";
 import type { Micro1JobSummaryDTO } from "../dto/micro1-job-summary.dto.js";
+import {
+  getMicro1DiscoverySource,
+  MICRO1_ELIGIBLE_JOBS_PAGE_LIMIT,
+} from "../config/micro1.config.js";
 
 const SOURCE_MAP: Record<string, JobSource> = {
   micro1: JobSource.MICRO1,
@@ -73,6 +76,47 @@ function mapStatus(status?: string): JobStatus {
   return STATUS_MAP[status.toLowerCase()] ?? JobStatus.IMPORTED;
 }
 
+/** Referral Dashboard: apply_url is fetch URL + persisted referralUrl (not HTN applyUrl). */
+function mapReferralSummaryDto(summary: Micro1JobSummaryDTO): SourceJobSummary {
+  return {
+    applyUrl: summary.apply_url,
+    referralUrl: summary.apply_url,
+    title: summary.job_name,
+    companyName: summary.company_name,
+    externalId: summary.job_id,
+  };
+}
+
+/** Public get_all_jobs: preserve legacy applyUrl/canonicalUrl mapping; not referralUrl. */
+function mapPublicSummaryDto(summary: Micro1JobSummaryDTO): SourceJobSummary {
+  return {
+    applyUrl: summary.apply_url,
+    title: summary.job_name,
+    companyName: summary.company_name,
+    externalId: summary.job_id,
+  };
+}
+
+function dedupeSummariesByJobId(
+  summaries: Micro1JobSummaryDTO[],
+): { unique: Micro1JobSummaryDTO[]; duplicatesRemoved: number } {
+  const seen = new Set<string>();
+  const unique: Micro1JobSummaryDTO[] = [];
+  let duplicatesRemoved = 0;
+
+  for (const summary of summaries) {
+    const id = summary.job_id;
+    if (!id || seen.has(id)) {
+      duplicatesRemoved++;
+      continue;
+    }
+    seen.add(id);
+    unique.push(summary);
+  }
+
+  return { unique, duplicatesRemoved };
+}
+
 export class Micro1SyncAdapter implements SourceAdapter {
   readonly source = JobSource.MICRO1;
 
@@ -82,6 +126,69 @@ export class Micro1SyncAdapter implements SourceAdapter {
   ) {}
 
   async getJobSummaries(syncStart: Date): Promise<SourceJobSummary[]> {
+    const discoverySource = getMicro1DiscoverySource();
+
+    if (discoverySource === "referral") {
+      return this.getReferralJobSummaries();
+    }
+
+    return this.getPublicJobSummaries();
+  }
+
+  /**
+   * Referral Dashboard discovery (authoritative when configured).
+   * Paginated GET /referral/portal/eligible-jobs with limit <= 100.
+   */
+  private async getReferralJobSummaries(): Promise<SourceJobSummary[]> {
+    const pageLimit = MICRO1_ELIGIBLE_JOBS_PAGE_LIMIT;
+    const allSummaries: Micro1JobSummaryDTO[] = [];
+    let pagesFetched = 0;
+    let reportedTotal: number | null = null;
+
+    for (let page = 1; ; page++) {
+      const portal = await this.client.getEligibleJobs(page, pageLimit);
+      pagesFetched++;
+
+      if (reportedTotal === null) {
+        reportedTotal = portal.total;
+      }
+
+      if (!portal.data.length) {
+        break;
+      }
+
+      allSummaries.push(...portal.data);
+
+      if (reportedTotal !== null && allSummaries.length >= reportedTotal) {
+        break;
+      }
+
+      if (portal.data.length < pageLimit) {
+        break;
+      }
+    }
+
+    if (allSummaries.length === 0) {
+      console.log("Micro1 eligible jobs discovered: 0");
+      console.log(`Micro1 pages fetched: ${pagesFetched}`);
+      console.log("Micro1 duplicate summaries removed: 0");
+      return [];
+    }
+
+    const { unique, duplicatesRemoved } = dedupeSummariesByJobId(allSummaries);
+
+    console.log(`Micro1 eligible jobs discovered: ${unique.length}`);
+    console.log(`Micro1 pages fetched: ${pagesFetched}`);
+    console.log(`Micro1 duplicate summaries removed: ${duplicatesRemoved}`);
+
+    return unique.map(mapReferralSummaryDto);
+  }
+
+  /**
+   * Legacy public portal discovery (fallback).
+   * POST /job/portal action=get_all_jobs filters.type=["EXPERT"].
+   */
+  private async getPublicJobSummaries(): Promise<SourceJobSummary[]> {
     const firstPage = await this.client.getJobs(1);
 
     if (!firstPage.data.length) {
@@ -102,21 +209,22 @@ export class Micro1SyncAdapter implements SourceAdapter {
       console.log(`[Micro1] Page ${page}/${totalPages}: ${portal.data.length} jobs`);
     }
 
-    return allSummaries.map((summary) => ({
-      applyUrl: summary.apply_url,
-      title: summary.job_name,
-      companyName: summary.company_name,
-    }));
+    return allSummaries.map(mapPublicSummaryDto);
   }
 
   async getJobDetails(summary: SourceJobSummary): Promise<HTNJob> {
     const job = await this.processor.process(summary.applyUrl);
-    // Portal summary.apply_url is the authoritative public/apply URL (incl.
-    // query/referral params). The HTML parser leaves canonicalUrl undefined,
-    // so re-attach the summary URL onto sourceUrl for mapToUpsertData.
+    const isReferral = typeof summary.referralUrl === "string" && summary.referralUrl.length > 0;
+
+    // Prefer detail externalId when present; fall back to discovery job_id.
+    // Referral: persist feed apply_url as referralUrl only — do not drive HTN applyUrl.
+    // Public: re-attach summary URL onto sourceUrl for legacy applyUrl/canonicalUrl mapping.
     return {
       ...job,
-      sourceUrl: summary.applyUrl,
+      ...(isReferral
+        ? { referralUrl: summary.referralUrl }
+        : { sourceUrl: summary.applyUrl }),
+      externalId: job.externalId || summary.externalId || job.externalId,
     };
   }
 
@@ -126,7 +234,10 @@ export class Micro1SyncAdapter implements SourceAdapter {
     const salaryMin = job.compensation?.monthly?.min ?? job.compensation?.hourly?.min ?? null;
     const salaryMax = job.compensation?.monthly?.max ?? job.compensation?.hourly?.max ?? null;
 
-    return {
+    const isReferral =
+      typeof job.referralUrl === "string" && job.referralUrl.length > 0;
+
+    const base: JobUpsertData = {
       externalId: job.externalId,
       source: mapSource(job.source),
       title: job.title,
@@ -142,8 +253,6 @@ export class Micro1SyncAdapter implements SourceAdapter {
       remote,
       postedAt: job.postedAt ?? null,
       expiresAt: job.expiresAt ?? null,
-      applyUrl: job.sourceUrl ?? null,
-      canonicalUrl: job.sourceUrl ?? null,
       status: mapStatus(job.status),
       skillNames: job.skills,
       salaryMin,
@@ -158,6 +267,22 @@ export class Micro1SyncAdapter implements SourceAdapter {
         compensationDetails: job.content?.compensation ?? null,
         aboutCompany: job.content?.aboutCompany ?? null,
       },
+    };
+
+    if (isReferral) {
+      // Referral Dashboard: store outreach URL separately. Do not set or synthesize
+      // HTN applyUrl / do not copy referral URL into canonicalUrl.
+      return {
+        ...base,
+        referralUrl: job.referralUrl,
+      };
+    }
+
+    // Public/legacy Micro1 path: preserve prior applyUrl + canonicalUrl behavior.
+    return {
+      ...base,
+      applyUrl: job.sourceUrl ?? null,
+      canonicalUrl: job.sourceUrl ?? null,
     };
   }
 }
