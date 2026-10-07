@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { getJobs, getJobById } from "../services/jobs.service.js";
 import type { JobFilters } from "../services/jobs.service.js";
+import { isAtsIntegrationRequest } from "../lib/ats-integration-auth.js";
 
 const router = Router();
 
@@ -68,7 +69,8 @@ router.get("/", async (req, res) => {
                                 : "newest",
                 };
                 
-                const result = await getJobs(filters, page, limit);
+                const includeReferralUrl = isAtsIntegrationRequest(req.headers.authorization);
+                const result = await getJobs(filters, page, limit, { includeReferralUrl });
 
         res.status(200).json({
             success: true,
@@ -98,7 +100,8 @@ router.get("/:jobId", async (req, res) => {
     try {
         const { jobId } = req.params;
 
-        const job = await getJobById(jobId);
+        const includeReferralUrl = isAtsIntegrationRequest(req.headers.authorization);
+        const job = await getJobById(jobId, { includeReferralUrl });
 
         if (!job) {
             return res.status(404).json({

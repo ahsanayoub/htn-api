@@ -73,8 +73,16 @@ export function mapNotionJob(page: any): ApiJob {
     };
 }
 
-export function mapPrismaJobToApiJob(prismaJob: JobWithRelations): ApiJob {
-    return {
+export type MapPrismaJobToApiJobOptions = {
+    /** When true, include Job.referralUrl for ATS website sync. Public callers must omit. */
+    includeReferralUrl?: boolean;
+};
+
+export function mapPrismaJobToApiJob(
+    prismaJob: JobWithRelations,
+    options?: MapPrismaJobToApiJobOptions,
+): ApiJob {
+    const apiJob: ApiJob = {
         jobId: prismaJob.externalId ?? "",
 
         title: prismaJob.title,
@@ -105,4 +113,10 @@ export function mapPrismaJobToApiJob(prismaJob: JobWithRelations): ApiJob {
 
         remote: prismaJob.remote ?? false,
     };
+
+    if (options?.includeReferralUrl) {
+        apiJob.referralUrl = prismaJob.referralUrl ?? null;
+    }
+
+    return apiJob;
 }

@@ -35,12 +35,23 @@ export interface JobSearchResult {
     };
 }
 
+export type JobsApiOptions = {
+    /**
+     * When true (ATS integration Bearer), include referralUrl on each job.
+     * Anonymous / public careers callers must leave this false so referralCode URLs stay private.
+     */
+    includeReferralUrl?: boolean;
+};
+
 /**
  * Public job detail lookup.
  * Only returns PUBLIC jobs so INTERNAL ATS projections are not exposed by ID.
  * CLOSED + PUBLIC remains reachable (historical careers deep-link behavior).
  */
-export async function getJobById(jobId: string): Promise<Job | null> {
+export async function getJobById(
+    jobId: string,
+    options: JobsApiOptions = {},
+): Promise<Job | null> {
     const prismaJob = await jobRepository.findByExternalId(jobId, {
         visibility: JobVisibility.PUBLIC,
     });
@@ -49,13 +60,16 @@ export async function getJobById(jobId: string): Promise<Job | null> {
         return null;
     }
 
-    return mapPrismaJobToApiJob(prismaJob);
+    return mapPrismaJobToApiJob(prismaJob, {
+        includeReferralUrl: options.includeReferralUrl,
+    });
 }
 
 export async function getJobs(
     filters: JobFilters = {},
     page = 1,
-    limit = 20
+    limit = 20,
+    options: JobsApiOptions = {},
 ): Promise<JobSearchResult> {
     const { jobs: prismaJobs, total } = await jobRepository.findMany({
         search: filters.search,
@@ -74,9 +88,10 @@ export async function getJobs(
     });
 
     const totalPages = Math.ceil(total / limit);
+    const mapOptions = { includeReferralUrl: options.includeReferralUrl };
 
     return {
-        jobs: prismaJobs.map(mapPrismaJobToApiJob),
+        jobs: prismaJobs.map((job) => mapPrismaJobToApiJob(job, mapOptions)),
 
         pagination: {
             page,
