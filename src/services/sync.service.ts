@@ -2,7 +2,7 @@ import { JobSource, JobStatus } from "@prisma/client";
 import prisma from "../prisma/client.js";
 import { JobRepository } from "../repositories/job.repository.js";
 import { OrganizationRepository } from "../repositories/organization.repository.js";
-import type { SourceAdapter } from "../adapters/source.adapter.js";
+import { shouldCloseJobsAbsentFromFeed, type SourceAdapter } from "../adapters/source.adapter.js";
 import {
   acquireSourceLock,
   releaseSourceLock,
@@ -127,9 +127,19 @@ export class SourceSyncService {
 
     let staleJobs: { id: string; externalId: string | null }[] = [];
 
+    const feedIsCompleteInventory = shouldCloseJobsAbsentFromFeed(this.adapter);
+    // A caller-supplied limit processes only a slice, so absence is not inventory.
+    const processedCompleteFeed = limit === undefined;
     if (toProcess.length === 0) {
       console.warn(
         `[${this.adapter.source}] Source returned 0 jobs — skipping stale-closure to avoid data loss`,
+      );
+    } else if (!feedIsCompleteInventory || !processedCompleteFeed) {
+      const reason = !feedIsCompleteInventory
+        ? "feed is not a complete inventory"
+        : "sync processed a limited subset";
+      console.warn(
+        `[${this.adapter.source}] Skipping stale-closure (${reason}) to avoid data loss`,
       );
     } else {
       const cutoff = floorToSeconds(syncStart);

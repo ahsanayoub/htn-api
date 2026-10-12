@@ -136,8 +136,17 @@ export class Micro1SyncAdapter implements SourceAdapter {
   }
 
   /**
-   * Referral Dashboard discovery (authoritative when configured).
+   * Public get_all_jobs is filtered to EXPERT and is not a verified complete
+   * inventory. Eligible-jobs is a referral subset. Neither may close absences.
+   */
+  closesJobsAbsentFromFeed(): boolean {
+    return false;
+  }
+
+  /**
+   * Referral Dashboard discovery.
    * Paginated GET /referral/portal/eligible-jobs with limit <= 100.
+   * Not a complete inventory — callers must not close jobs missing from it.
    */
   private async getReferralJobSummaries(): Promise<SourceJobSummary[]> {
     const pageLimit = MICRO1_ELIGIBLE_JOBS_PAGE_LIMIT;

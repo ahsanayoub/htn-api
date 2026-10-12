@@ -20,6 +20,13 @@ export interface SourceJobSummary {
 export interface SourceAdapter {
   readonly source: JobSource;
 
+  /**
+   * Whether jobs missing from this cycle's summaries may be closed.
+   * Omit or return true for a complete inventory. Micro1 returns false:
+   * neither public discovery nor eligible-jobs is a verified complete inventory.
+   */
+  closesJobsAbsentFromFeed?(): boolean;
+
   getJobSummaries(syncStart: Date): Promise<SourceJobSummary[]>;
 
   getJobDetails(summary: SourceJobSummary): Promise<HTNJob>;
@@ -29,4 +36,15 @@ export interface SourceAdapter {
     organizationId: string,
     syncStart: Date,
   ): JobUpsertData;
+}
+
+/**
+ * Absence may close jobs only when the adapter explicitly says this feed is a
+ * complete inventory. Omitting the method preserves closure for other sources.
+ * Micro1 returns false for both public discovery and the referral subset.
+ */
+export function shouldCloseJobsAbsentFromFeed(
+  adapter: Pick<SourceAdapter, "closesJobsAbsentFromFeed">,
+): boolean {
+  return adapter.closesJobsAbsentFromFeed?.() !== false;
 }

@@ -4,6 +4,7 @@ import { JobSource, JobStatus } from "@prisma/client";
 import type { SourceAdapter, SourceJobSummary } from "../../src/adapters/source.adapter.js";
 import type { HTNJob } from "../../src/models/htn-job.model.js";
 import type { JobUpsertData } from "../../src/repositories/job.repository.js";
+import { Micro1SyncAdapter } from "../../src/adapters/micro1.adapter.js";
 import { SourceSyncService } from "../../src/services/sync.service.js";
 import { JobRepository } from "../../src/repositories/job.repository.js";
 
@@ -63,14 +64,27 @@ function createMockHTNJob(externalId: string, title: string): HTNJob {
 }
 
 class TestAdapter implements SourceAdapter {
-  readonly source = JobSource.MICRO1;
+  source: JobSource = JobSource.MICRO1;
   summaries: SourceJobSummary[] = [];
+  closeAbsentFromFeed = true;
+  throwOnSummaries = false;
+  throwOnDetails = false;
+
+  closesJobsAbsentFromFeed(): boolean {
+    return this.closeAbsentFromFeed;
+  }
 
   async getJobSummaries(_syncStart: Date): Promise<SourceJobSummary[]> {
+    if (this.throwOnSummaries) {
+      throw new Error("partial feed failure");
+    }
     return this.summaries;
   }
 
   async getJobDetails(summary: SourceJobSummary): Promise<HTNJob> {
+    if (this.throwOnDetails) {
+      throw new Error("detail fetch failed");
+    }
     return createMockHTNJob(summary.applyUrl, summary.title);
   }
 
@@ -310,6 +324,10 @@ describe("SourceSyncService stale-job closure", () => {
     mockDb.sourceSync.upsert.mockClear();
 
     adapter.summaries = [];
+    adapter.source = JobSource.MICRO1;
+    adapter.closeAbsentFromFeed = true;
+    adapter.throwOnSummaries = false;
+    adapter.throwOnDetails = false;
   });
 
   afterEach(() => {
@@ -760,6 +778,151 @@ describe("SourceSyncService stale-job closure", () => {
       expect(sourceText).not.toMatch(/\$transaction\s*\(/);
       // sync() must call the lock helper.
       expect(sourceText).toMatch(/acquireSourceLock|releaseSourceLock/);
+    });
+  });
+
+  describe("Micro1 feed is not treated as a complete inventory", () => {
+    it("does not close a job that is absent from a non-complete feed", async () => {
+      store.jobs.push({
+        id: "j-absent",
+        externalId: "ext-absent",
+        source: JobSource.MICRO1,
+        status: JobStatus.ACTIVE,
+        lastSeenAt: STALE_DATE,
+      });
+
+      adapter.closeAbsentFromFeed = false;
+      adapter.summaries = [CURRENT_SUMMARY];
+      await service.sync();
+
+      const job = store.jobs.find((j) => j.id === "j-absent")!;
+      expect(job.status).toBe(JobStatus.ACTIVE);
+      expect(mockDb.job.upsert).toHaveBeenCalled();
+      expect(mockDb.job.updateMany).not.toHaveBeenCalled();
+    });
+
+    it("does not close Micro1 jobs when every detail fetch fails", async () => {
+      const previous = process.env.MICRO1_DISCOVERY_SOURCE;
+      process.env.MICRO1_DISCOVERY_SOURCE = "public";
+      store.jobs.push({
+        id: "j-failed-details",
+        externalId: "ext-failed-details",
+        source: JobSource.MICRO1,
+        status: JobStatus.ACTIVE,
+        lastSeenAt: STALE_DATE,
+      });
+
+      const micro1 = new Micro1SyncAdapter({} as never, {} as never);
+      vi.spyOn(micro1, "getJobSummaries").mockResolvedValue([
+        { applyUrl: "https://jobs.micro1.ai/post/a", title: "A", companyName: "Co", externalId: "a" },
+        { applyUrl: "https://jobs.micro1.ai/post/b", title: "B", companyName: "Co", externalId: "b" },
+      ]);
+      vi.spyOn(micro1, "getJobDetails").mockRejectedValue(new Error("detail fetch failed"));
+
+      try {
+        const result = await new SourceSyncService(micro1).sync();
+
+        expect(micro1.closesJobsAbsentFromFeed()).toBe(false);
+        expect(result.totalSeen).toBe(2);
+        expect(result.totalFailed).toBe(2);
+        expect(result.totalCreated).toBe(0);
+        expect(result.totalUpdated).toBe(0);
+        expect(result.totalStale).toBe(0);
+        expect(store.jobs.find((j) => j.id === "j-failed-details")!.status).toBe(JobStatus.ACTIVE);
+        expect(mockDb.job.updateMany).not.toHaveBeenCalled();
+      } finally {
+        if (previous === undefined) delete process.env.MICRO1_DISCOVERY_SOURCE;
+        else process.env.MICRO1_DISCOVERY_SOURCE = previous;
+      }
+    });
+
+    it("does not close jobs when the feed is empty", async () => {
+      store.jobs.push({
+        id: "j-empty",
+        externalId: "ext-empty",
+        source: JobSource.MICRO1,
+        status: JobStatus.ACTIVE,
+        lastSeenAt: STALE_DATE,
+      });
+
+      adapter.closeAbsentFromFeed = false;
+      adapter.summaries = [];
+      await service.sync();
+
+      expect(store.jobs.find((j) => j.id === "j-empty")!.status).toBe(JobStatus.ACTIVE);
+      expect(mockDb.job.updateMany).not.toHaveBeenCalled();
+    });
+
+    it("does not close jobs when summary fetch fails", async () => {
+      store.jobs.push({
+        id: "j-fail",
+        externalId: "ext-fail",
+        source: JobSource.MICRO1,
+        status: JobStatus.ACTIVE,
+        lastSeenAt: STALE_DATE,
+      });
+
+      adapter.closeAbsentFromFeed = false;
+      adapter.throwOnSummaries = true;
+
+      await expect(service.sync()).rejects.toThrow("partial feed failure");
+      expect(store.jobs.find((j) => j.id === "j-fail")!.status).toBe(JobStatus.ACTIVE);
+      expect(mockDb.job.updateMany).not.toHaveBeenCalled();
+    });
+
+    it("does not close jobs when only a limited slice is processed", async () => {
+      store.jobs.push({
+        id: "j-limited",
+        externalId: "ext-limited",
+        source: JobSource.MICRO1,
+        status: JobStatus.ACTIVE,
+        lastSeenAt: STALE_DATE,
+      });
+
+      adapter.summaries = [CURRENT_SUMMARY, { applyUrl: "ext-2", title: "Two", companyName: "Test Co" }];
+      await service.sync(1);
+
+      expect(store.jobs.find((j) => j.id === "j-limited")!.status).toBe(JobStatus.ACTIVE);
+      expect(mockDb.job.updateMany).not.toHaveBeenCalled();
+    });
+
+    it("still closes stale jobs for another source with a complete feed", async () => {
+      store.jobs.push({
+        id: "j-gh",
+        externalId: "ext-gh",
+        source: JobSource.GREENHOUSE,
+        status: JobStatus.ACTIVE,
+        lastSeenAt: STALE_DATE,
+      });
+
+      adapter.source = JobSource.GREENHOUSE;
+      adapter.closeAbsentFromFeed = true;
+      adapter.summaries = [{ applyUrl: "gh-current", title: "Current", companyName: "Test Co" }];
+      await service.sync();
+
+      expect(store.jobs.find((j) => j.id === "j-gh")!.status).toBe(JobStatus.CLOSED);
+    });
+
+    it("still closes another source when every detail fetch fails on a non-empty feed", async () => {
+      store.jobs.push({
+        id: "j-gh-failed",
+        externalId: "ext-gh-failed",
+        source: JobSource.GREENHOUSE,
+        status: JobStatus.ACTIVE,
+        lastSeenAt: STALE_DATE,
+      });
+
+      adapter.source = JobSource.GREENHOUSE;
+      adapter.closeAbsentFromFeed = true;
+      adapter.throwOnDetails = true;
+      adapter.summaries = [{ applyUrl: "gh-current", title: "Current", companyName: "Test Co" }];
+
+      const result = await service.sync();
+
+      expect(result.totalFailed).toBe(1);
+      expect(result.totalCreated).toBe(0);
+      expect(store.jobs.find((j) => j.id === "j-gh-failed")!.status).toBe(JobStatus.CLOSED);
+      expect(mockDb.job.updateMany).toHaveBeenCalled();
     });
   });
 });
