@@ -53,6 +53,11 @@ export interface JobUpsertData {
   canonicalUrl?: string | null;
   referralUrl?: string | null;
   status?: JobStatus;
+  /**
+   * When true, create still uses status, but update leaves Job.status unchanged.
+   * Referral eligibility creates set this so a raced update cannot change status.
+   */
+  preserveStatusOnUpdate?: boolean;
   visibility?: JobVisibility;
   sourceVersion?: string | null;
   skillNames?: string[];
@@ -226,7 +231,9 @@ export class JobRepository {
           ...(data.applyUrl !== undefined ? { applyUrl: data.applyUrl } : {}),
           ...(data.canonicalUrl !== undefined ? { canonicalUrl: data.canonicalUrl } : {}),
           ...(data.referralUrl !== undefined ? { referralUrl: data.referralUrl } : {}),
-          status: data.status ?? JobStatus.IMPORTED,
+          ...(data.preserveStatusOnUpdate
+            ? {}
+            : { status: data.status ?? JobStatus.IMPORTED }),
           ...(data.visibility !== undefined ? { visibility: data.visibility } : {}),
           sourceVersion: data.sourceVersion,
           salaryMin: data.salaryMin,

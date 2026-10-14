@@ -16,7 +16,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "sync:micro1": "tsx src/scripts/sync-micro1.ts"
+    "sync:micro1": "tsx src/scripts/sync-micro1.ts",
+    "reconcile:micro1-referral": "tsx src/scripts/reconcile-micro1-referral-eligibility.ts",
+    "reconcile:micro1-referral:dry-run": "tsx src/scripts/reconcile-micro1-referral-eligibility.ts --dry-run"
   },
   "keywords": [],
   "author": "",
