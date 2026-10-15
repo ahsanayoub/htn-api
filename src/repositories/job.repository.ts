@@ -1,5 +1,5 @@
 import prisma from "../prisma/client.js";
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import {
   EmploymentType,
   JobSource,
@@ -136,6 +136,11 @@ function floorToSeconds(date: Date): Date {
   return new Date(Math.floor(date.getTime() / 1000) * 1000);
 }
 
+/** Prisma interactive-transaction client. Reconciliation writes must use this and must not open another transaction. */
+export type DbTransaction = Prisma.TransactionClient;
+
+type SkillWriteClient = Pick<Prisma.TransactionClient, "skill" | "jobSkill">;
+
 export class JobRepository {
   async findMany(params: JobQueryParams): Promise<{
     jobs: JobWithRelations[];
@@ -167,17 +172,55 @@ export class JobRepository {
     });
   }
 
-  async upsert(data: JobUpsertData): Promise<"created" | "updated"> {
-    const { wasExisting, jobId } = await prisma.$transaction(async (tx) => {
-      const existing = await tx.job.findFirst({
-        where: {
-          source: data.source,
-          externalId: data.externalId,
-        },
-        select: { id: true },
-      });
+  async updateSourceStatus(
+    db: DbTransaction,
+    id: string,
+    source: JobSource,
+    status: JobStatus,
+  ): Promise<void> {
+    await db.job.updateMany({
+      where: { id, source },
+      data: { status },
+    });
+  }
 
-      const job = await tx.job.upsert({
+  async upsert(data: JobUpsertData, db?: DbTransaction): Promise<"created" | "updated"> {
+    if (db) {
+      return this.upsertOn(db, data);
+    }
+
+    const { wasExisting, jobId } = await prisma.$transaction(async (tx) => {
+      return this.upsertRow(tx, data);
+    });
+
+    if (data.skillNames && data.skillNames.length > 0) {
+      await this.addSkills(prisma as unknown as SkillWriteClient, jobId, data.skillNames);
+    }
+
+    return wasExisting ? "updated" : "created";
+  }
+
+  private async upsertOn(db: DbTransaction, data: JobUpsertData): Promise<"created" | "updated"> {
+    const { wasExisting, jobId } = await this.upsertRow(db, data);
+    if (data.skillNames && data.skillNames.length > 0) {
+      await this.addSkills(db, jobId, data.skillNames);
+    }
+    return wasExisting ? "updated" : "created";
+  }
+
+  private async upsertRow(
+    db: DbTransaction,
+    data: JobUpsertData,
+  ): Promise<{ wasExisting: boolean; jobId: string }> {
+    const existing = await db.job.findFirst({
+      where: {
+        source: data.source,
+        externalId: data.externalId,
+      },
+      select: { id: true },
+    });
+
+    const job = await db.job.upsert({
         where: {
           source_externalId: {
             source: data.source,
@@ -246,14 +289,7 @@ export class JobRepository {
         },
       });
 
-      return { wasExisting: !!existing, jobId: job.id };
-    });
-
-    if (data.skillNames && data.skillNames.length > 0) {
-      await this.addSkills(prisma, jobId, data.skillNames);
-    }
-
-    return wasExisting ? "updated" : "created";
+    return { wasExisting: !!existing, jobId: job.id };
   }
 
   async findStaleJobs(
@@ -271,7 +307,7 @@ export class JobRepository {
   }
 
   async addSkills(
-    client: PrismaClient,
+    client: SkillWriteClient,
     jobId: string,
     skillNames: string[]
   ): Promise<void> {
