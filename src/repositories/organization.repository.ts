@@ -1,5 +1,7 @@
-import prisma from "../prisma/client.js";
 import { OrganizationType } from "@prisma/client";
+
+import prisma from "../prisma/client.js";
+import type { DbTransaction } from "./job.repository.js";
 
 export class OrganizationRepository {
   async findOrCreate(args: {
@@ -16,8 +18,9 @@ export class OrganizationRepository {
     employeeCount?: number | null;
     foundedYear?: number | null;
     legalName?: string | null;
-  }): Promise<string> {
-    const existing = await prisma.organization.findFirst({
+  }, db?: DbTransaction): Promise<string> {
+    const client = db ?? prisma;
+    const existing = await client.organization.findFirst({
       where: { name: args.name },
     });
 
@@ -25,7 +28,7 @@ export class OrganizationRepository {
       return existing.id;
     }
 
-    const created = await prisma.organization.create({
+    const created = await client.organization.create({
       data: {
         name: args.name,
         type: args.type ?? OrganizationType.COMPANY,

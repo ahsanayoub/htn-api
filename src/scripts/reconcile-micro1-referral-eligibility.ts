@@ -16,12 +16,11 @@ import { Micro1Mapper } from "../mappers/micro1.mapper.js";
 import { Micro1Parser } from "../parsers/micro1.parser.js";
 import { Micro1Processor } from "../processors/micro1.processor.js";
 import prisma from "../prisma/client.js";
-import { JobRepository } from "../repositories/job.repository.js";
-import { OrganizationRepository } from "../repositories/organization.repository.js";
 import {
   eligibilityCreateData,
   reconcileMicro1ReferralEligibility,
   type Micro1EligibilityJob,
+  type PreparedEligibilityCreate,
 } from "../services/micro1-referral-eligibility.js";
 import { captureReferralInventory } from "../services/micro1-referral-inventory.js";
 import type { SourceJobSummary } from "../adapters/source.adapter.js";
@@ -35,8 +34,6 @@ async function main() {
     client,
     new Micro1Processor(client, new Micro1Parser(), new Micro1Mapper()),
   );
-  const jobRepository = new JobRepository();
-  const organizationRepository = new OrganizationRepository();
   const summaries = new Map<string, SourceJobSummary>();
   let lock: HeldSourceLock | null = null;
 
@@ -71,24 +68,33 @@ async function main() {
         where: { source: JobSource.MICRO1 },
         select: { id: true, externalId: true, status: true, source: true },
       }) as Promise<Micro1EligibilityJob[]>,
-    setStatus: async (id, status) => {
-      await prisma.job.updateMany({
-        where: { id, source: JobSource.MICRO1 },
-        data: { status },
-      });
-    },
-    createJob: async (externalId) => {
-      const match = summaries.get(externalId);
-      if (!match?.referralUrl) {
-        throw new Error(`Eligible job ${externalId} is missing a referral summary`);
+    prepareCreates: async (externalIds) => {
+      const prepared: PreparedEligibilityCreate[] = [];
+      const seenAt = new Date();
+      for (const externalId of externalIds) {
+        const match = summaries.get(externalId);
+        if (!match?.referralUrl) {
+          throw new Error(`Eligible job ${externalId} is missing a referral summary`);
+        }
+        const job = await adapter.getJobDetails(match);
+        const organizationName = job.company.name?.trim();
+        if (!organizationName) {
+          throw new Error(`Eligible job ${externalId} is missing an organization name`);
+        }
+        prepared.push({
+          externalId,
+          organizationName,
+          data: eligibilityCreateData(
+            // Organization id is assigned inside the write transaction.
+            adapter.mapToUpsertData(job, "pending-organization", seenAt),
+            externalId,
+          ),
+        });
       }
-      const job = await adapter.getJobDetails(match);
-      const organizationId = await organizationRepository.findOrCreate({
-        name: job.company.name,
-      });
-      const upsert = adapter.mapToUpsertData(job, organizationId, new Date());
-      await jobRepository.upsert(eligibilityCreateData(upsert, externalId));
+      return prepared;
     },
+    runTransaction: (work) =>
+      prisma.$transaction((tx) => work(tx), { maxWait: 10_000, timeout: 120_000 }),
   });
 
   console.log(JSON.stringify(report, null, 2));

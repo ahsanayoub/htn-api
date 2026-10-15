@@ -1,6 +1,7 @@
 import { JobSource, JobStatus } from "@prisma/client";
 
-import type { JobUpsertData } from "../repositories/job.repository.js";
+import { JobRepository, type DbTransaction, type JobUpsertData } from "../repositories/job.repository.js";
+import { OrganizationRepository } from "../repositories/organization.repository.js";
 import type { ReferralInventoryCapture } from "./micro1-referral-inventory.js";
 
 /**
@@ -158,13 +159,56 @@ export type ReferralEligibilityReport = {
   reopen: ReferralEligibilityChange[];
 };
 
+/** Job payload fetched from Micro1 before any database transaction opens. */
+export type PreparedEligibilityCreate = {
+  externalId: string;
+  organizationName: string;
+  data: JobUpsertData;
+};
+
+/**
+ * Status changes, organization rows, job upserts, and skill writes for one plan.
+ * The caller supplies the interactive-transaction client. This function does not
+ * open a transaction and does not call the global Prisma client.
+ */
+export async function applyReferralEligibilityInTransaction(
+  tx: DbTransaction,
+  plan: ReferralEligibilityPlan,
+  prepared: readonly PreparedEligibilityCreate[],
+): Promise<void> {
+  const jobs = new JobRepository();
+  const organizations = new OrganizationRepository();
+
+  for (const change of plan.reopen) {
+    await jobs.updateSourceStatus(tx, change.id, JobSource.MICRO1, JobStatus.ACTIVE);
+  }
+  for (const change of plan.close) {
+    await jobs.updateSourceStatus(tx, change.id, JobSource.MICRO1, JobStatus.CLOSED);
+  }
+  for (const item of prepared) {
+    const organizationId = await organizations.findOrCreate(
+      { name: item.organizationName },
+      tx,
+    );
+    await jobs.upsert(
+      eligibilityCreateData({ ...item.data, organizationId }, item.externalId),
+      tx,
+    );
+  }
+}
+
 export async function reconcileMicro1ReferralEligibility(input: {
   dryRun: boolean;
   referralDiscovery: boolean;
   loadSnapshot: () => Promise<ReferralInventoryCapture>;
   listJobs: () => Promise<Micro1EligibilityJob[]>;
-  setStatus: (id: string, status: JobStatus) => Promise<void>;
-  createJob: (externalId: string) => Promise<void>;
+  /**
+   * Fetch every new job's details. Called only after a validated snapshot and
+   * only when the run will write. Must not touch the database.
+   */
+  prepareCreates: (externalIds: readonly string[]) => Promise<PreparedEligibilityCreate[]>;
+  /** Runs the supplied work inside one interactive transaction. */
+  runTransaction: (work: (tx: DbTransaction) => Promise<void>) => Promise<void>;
   acquireLock?: () => Promise<boolean>;
   releaseLock?: () => Promise<void>;
 }): Promise<ReferralEligibilityReport> {
@@ -208,15 +252,17 @@ export async function reconcileMicro1ReferralEligibility(input: {
       return { ...report, applied: false };
     }
 
-    for (const change of plan.reopen) {
-      await input.setStatus(change.id, JobStatus.ACTIVE);
+    const prepared = await input.prepareCreates(plan.create);
+    const preparedIds = new Set(prepared.map((item) => item.externalId));
+    if (
+      prepared.length !== plan.create.length ||
+      plan.create.some((externalId) => !preparedIds.has(externalId))
+    ) {
+      throw new Error("Referral eligibility create preparation did not cover every planned job");
     }
-    for (const change of plan.close) {
-      await input.setStatus(change.id, JobStatus.CLOSED);
-    }
-    for (const externalId of plan.create) {
-      await input.createJob(externalId);
-    }
+    await input.runTransaction((tx) =>
+      applyReferralEligibilityInTransaction(tx, plan, prepared),
+    );
 
     return report;
   } finally {
